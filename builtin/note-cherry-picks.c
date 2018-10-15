@@ -94,9 +94,34 @@ static void record_cherry_pick(struct commit *commit, void *unused)
 	free(buffer);
 }
 
+static void show_cherry_picks(struct object *obj, int level)
+{
+	struct object_array *cps;
+	int i;
+
+	if (obj->type != OBJ_COMMIT)
+		return;
+
+	cps = get_commit_cherry_picks((struct commit *)obj);
+	if (!cps)
+		return;
+
+	for (i = 0; i < cps->nr; i++) {
+		struct object *cherry_pick = cps->objects[i].item;
+		int j;
+
+		for (j = 0; j < level; j++)
+			fputs(" ", stdout);
+
+		printf("%s\n", oid_to_hex(&cherry_pick->oid));
+		show_cherry_picks(cherry_pick, level + 1);
+	}
+}
+
 int cmd_note_cherry_picks(int argc, const char **argv, const char *prefix)
 {
 	struct rev_info revs;
+	int i;
 	struct setup_revision_opt s_r_opt = {
 		.def = "HEAD",
 		.revarg_opt = REVARG_CANNOT_BE_FILENAME
@@ -122,6 +147,13 @@ int cmd_note_cherry_picks(int argc, const char **argv, const char *prefix)
 
 	init_commit_cherry_picks(&cherry_picks);
 	traverse_commit_list(&revs, record_cherry_pick, NULL, NULL);
+
+	object_array_remove_duplicates(&cherry_picked);
+
+	for (i = 0; i < cherry_picked.nr; i++) {
+		printf("%s\n", oid_to_hex(&cherry_picked.objects[i].item->oid));
+		show_cherry_picks(cherry_picked.objects[i].item, 1);
+	}
 
 	return 0;
 }
