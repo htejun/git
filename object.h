@@ -173,6 +173,12 @@ void object_array_filter(struct object_array *array,
 			 object_array_each_func_t want, void *cb_data);
 
 /*
+ * Returns 1 if array already contains an entry with the specified name.
+ * Otherwise, 0.
+ */
+int object_array_contains_name(struct object_array *array, const char *name);
+
+/*
  * Remove from array all but the first entry with a given name.
  * Warning: this function uses an O(N^2) algorithm.
  */

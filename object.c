@@ -404,7 +404,7 @@ void object_array_clear(struct object_array *array)
 /*
  * Return true iff array already contains an entry with name.
  */
-static int contains_name(struct object_array *array, const char *name)
+int object_array_contains_name(struct object_array *array, const char *name)
 {
 	unsigned nr = array->nr, i;
 	struct object_array_entry *object = array->objects;
@@ -422,7 +422,7 @@ void object_array_remove_duplicates(struct object_array *array)
 
 	array->nr = 0;
 	for (src = 0; src < nr; src++) {
-		if (!contains_name(array, objects[src].name)) {
+		if (!object_array_contains_name(array, objects[src].name)) {
 			if (src != array->nr)
 				objects[array->nr] = objects[src];
 			array->nr++;
