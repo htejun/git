@@ -1,10 +1,12 @@
 #include "builtin.h"
 #include "cache.h"
+#include "strbuf.h"
 #include "repository.h"
 #include "config.h"
 #include "commit.h"
 #include "trailer.h"
 #include "revision.h"
+#include "argv-array.h"
 #include "commit-slab.h"
 #include "list-objects.h"
 #include "object-store.h"
@@ -64,7 +66,7 @@ static void record_cherry_pick(struct commit *commit, void *unused)
 			struct object *from_object;
 			struct commit *from_commit;
 			struct object_array *from_cps;
-			char commit_hex[GIT_MAX_HEXSZ + 1];
+			char cherry_hex[GIT_MAX_HEXSZ + 1];
 			char from_hex[GIT_MAX_HEXSZ + 1];
 
 			if (get_oid_hex(line + prefix_len, &from_oid))
@@ -77,15 +79,14 @@ static void record_cherry_pick(struct commit *commit, void *unused)
 			from_commit = (struct commit *)from_object;
 			from_cps = get_create_commit_cherry_picks(from_commit);
 
-			oid_to_hex_r(commit_hex, &commit->object.oid);
+			oid_to_hex_r(cherry_hex, &commit->object.oid);
 			oid_to_hex_r(from_hex, &from_commit->object.oid);
 
-			if (!object_array_contains_name(from_cps, commit_hex)) {
-				add_object_array(&commit->object, commit_hex,
+			if (!object_array_contains_name(from_cps, cherry_hex)) {
+				add_object_array(&commit->object, cherry_hex,
 						 from_cps);
 				add_object_array(&from_commit->object, from_hex,
 						 &cherry_picked);
-				record_cherry_pick(from_commit, unused);
 			}
 			break;
 		}
@@ -116,6 +117,38 @@ static void show_cherry_picks(struct object *obj, int level)
 		printf("%s\n", oid_to_hex(&cherry_pick->oid));
 		show_cherry_picks(cherry_pick, level + 1);
 	}
+}
+
+static int note_cherry_picks(struct commit *commit, const char *prefix)
+{
+	char from_hex[GIT_MAX_HEXSZ + 1];
+	char cherry_hex[GIT_MAX_HEXSZ + 1];
+	struct strbuf note = STRBUF_INIT;
+	struct argv_array args;
+	struct object_array *cps;
+	int i, ret;
+
+	cps = get_commit_cherry_picks(commit);
+	if (!cps)
+		return 0;
+
+	oid_to_hex_r(from_hex, &commit->object.oid);
+
+	for (i = 0; i < cps->nr; i++) {
+		struct object *cherry = cps->objects[i].item;
+
+		oid_to_hex_r(cherry_hex, &cherry->oid);
+		strbuf_addf(&note, "Cherry-picked-to: %s\n", cherry_hex);
+		if (verbose)
+			printf("Noting %s -> %s\n", from_hex, cherry_hex);
+	}
+
+	argv_array_init(&args);
+	argv_array_pushl(&args, "notes", "add", "--force", "--message",
+			 note.buf, from_hex, NULL);
+	ret = cmd_notes(args.argc, args.argv, prefix);
+	strbuf_release(&note);
+	return ret;
 }
 
 int cmd_note_cherry_picks(int argc, const char **argv, const char *prefix)
@@ -150,10 +183,11 @@ int cmd_note_cherry_picks(int argc, const char **argv, const char *prefix)
 
 	object_array_remove_duplicates(&cherry_picked);
 
-	for (i = 0; i < cherry_picked.nr; i++) {
-		printf("%s\n", oid_to_hex(&cherry_picked.objects[i].item->oid));
-		show_cherry_picks(cherry_picked.objects[i].item, 1);
-	}
+	for (i = 0; i < cherry_picked.nr; i++)
+		note_cherry_picks((struct commit *)cherry_picked.objects[i].item,
+				  prefix);
+		//printf("%s\n", oid_to_hex(&cherry_picked.objects[i].item->oid));
+		//show_cherry_picks(cherry_picked.objects[i].item, 1);
 
 	return 0;
 }
