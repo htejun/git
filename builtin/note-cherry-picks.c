@@ -95,6 +95,17 @@ static void record_cherry_pick(struct commit *commit, void *unused)
 	free(buffer);
 }
 
+static void clear_cherry_pick_notes(struct commit *commit, void *prefix)
+{
+	struct argv_array args;
+
+	argv_array_init(&args);
+	argv_array_pushl(&args, "notes", "--ref", "cherry-picks", "remove",
+			 "--ignore-missing",
+			 oid_to_hex(&commit->object.oid), NULL);
+	cmd_notes(args.argc, args.argv, prefix);
+}
+
 static void show_cherry_picks(struct object *obj, int level)
 {
 	struct object_array *cps;
@@ -144,8 +155,8 @@ static int note_cherry_picks(struct commit *commit, const char *prefix)
 	}
 
 	argv_array_init(&args);
-	argv_array_pushl(&args, "notes", "add", "--force", "--message",
-			 note.buf, from_hex, NULL);
+	argv_array_pushl(&args, "notes", "--ref", "cherry-picks", "add",
+			 "--force", "--message", note.buf, from_hex, NULL);
 	ret = cmd_notes(args.argc, args.argv, prefix);
 	strbuf_release(&note);
 	return ret;
@@ -154,7 +165,7 @@ static int note_cherry_picks(struct commit *commit, const char *prefix)
 int cmd_note_cherry_picks(int argc, const char **argv, const char *prefix)
 {
 	struct rev_info revs;
-	int i;
+	int i, ret;
 	struct setup_revision_opt s_r_opt = {
 		.def = "HEAD",
 		.revarg_opt = REVARG_CANNOT_BE_FILENAME
@@ -178,16 +189,23 @@ int cmd_note_cherry_picks(int argc, const char **argv, const char *prefix)
 	if (prepare_revision_walk(&revs))
 		die("revision walk setup failed");
 
+	if (clear) {
+		traverse_commit_list(&revs, clear_cherry_pick_notes, NULL,
+				     (void *)prefix);
+		return 0;
+	}
+
 	init_commit_cherry_picks(&cherry_picks);
 	traverse_commit_list(&revs, record_cherry_pick, NULL, NULL);
 
 	object_array_remove_duplicates(&cherry_picked);
 
-	for (i = 0; i < cherry_picked.nr; i++)
-		note_cherry_picks((struct commit *)cherry_picked.objects[i].item,
-				  prefix);
-		//printf("%s\n", oid_to_hex(&cherry_picked.objects[i].item->oid));
-		//show_cherry_picks(cherry_picked.objects[i].item, 1);
+	for (i = 0; i < cherry_picked.nr; i++) {
+		ret = note_cherry_picks((void *)cherry_picked.objects[i].item,
+					prefix);
+		if (ret)
+			return ret;
+	}
 
 	return 0;
 }
