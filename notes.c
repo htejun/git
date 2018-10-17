@@ -1189,6 +1189,26 @@ void free_notes(struct notes_tree *t)
 	memset(t, 0, sizeof(struct notes_tree));
 }
 
+static void walk_cherry_picks(struct object_id *from_oid, struct strbuf *sb,
+			      int level)
+{
+	struct object_array cps = OBJECT_ARRAY_INIT;
+	int i;
+
+	read_cherry_picks_note(from_oid, &cps);
+
+	for (i = 0; i < cps.nr; i++) {
+		strbuf_addf(sb, "    %s%*s%s\n",
+			    NOTES_CHERRY_PICKED_TO, 2 * level, "",
+			    cps.objects[i].name);
+		if (cps.objects[i].item)
+			walk_cherry_picks(&cps.objects[i].item->oid, sb,
+					  level + 1);
+	}
+
+	object_array_clear(&cps);
+}
+
 /*
  * Fill the given strbuf with the notes associated with the given object.
  *
@@ -1261,13 +1281,16 @@ static void format_note(struct notes_tree *t, const struct object_id *object_oid
 		strbuf_add(sb, msg_p, linelen);
 		strbuf_addch(sb, '\n');
 
-		/*if (format_cherry_picks &&
-		    lineline > strlen(NOTES_CHERRY_PICKED_TO)) {
-			char hex[GIT_MAX_HEXSZ + 1];
+		if (format_cherry_picks &&
+		    starts_with(msg_p, NOTES_CHERRY_PICKED_TO)) {
+			struct object_id oid;
 
-			memcpy(hex, msg_p + strlen(NOTES_CHERRY_PICKED_TO),
-			       sizeof(hex));
-			       walk_cherry_picks(hex, sb, 1);*/
+			if (get_oid_hex(msg_p + strlen(NOTES_CHERRY_PICKED_TO),
+					&oid))
+				continue;
+
+			walk_cherry_picks(&oid, sb, 1);
+		}
 	}
 
 	free(msg);
