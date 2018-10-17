@@ -2,9 +2,13 @@
 #define NOTES_H
 
 #include "string-list.h"
+#include "object.h"
 
 struct object_id;
 struct strbuf;
+
+#define NOTES_CHERRY_PICKS_REF		"refs/notes/cherry-picks"
+#define NOTES_CHERRY_PICKED_TO		"Cherry-picked-to: "
 
 /*
  * Function type for combining two notes annotating the same object.
@@ -316,5 +320,8 @@ void expand_notes_ref(struct strbuf *sb);
  * where get_sha1 fails.
  */
 void expand_loose_notes_ref(struct strbuf *sb);
+
+void read_cherry_picks_note(const struct object_id *commit_oid,
+			    struct object_array *result);
 
 #endif

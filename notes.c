@@ -1208,6 +1208,7 @@ static void format_note(struct notes_tree *t, const struct object_id *object_oid
 	char *msg, *msg_p;
 	unsigned long linelen, msglen;
 	enum object_type type;
+	int format_cherry_picks;
 
 	if (!t)
 		t = &default_notes_tree;
@@ -1250,6 +1251,8 @@ static void format_note(struct notes_tree *t, const struct object_id *object_oid
 		}
 	}
 
+	format_cherry_picks = !raw && !strcmp(t->ref, "refs/notes/cherry-picks");
+
 	for (msg_p = msg; msg_p < msg + msglen; msg_p += linelen + 1) {
 		linelen = strchrnul(msg_p, '\n') - msg_p;
 
@@ -1257,6 +1260,14 @@ static void format_note(struct notes_tree *t, const struct object_id *object_oid
 			strbuf_addstr(sb, "    ");
 		strbuf_add(sb, msg_p, linelen);
 		strbuf_addch(sb, '\n');
+
+		/*if (format_cherry_picks &&
+		    lineline > strlen(NOTES_CHERRY_PICKED_TO)) {
+			char hex[GIT_MAX_HEXSZ + 1];
+
+			memcpy(hex, msg_p + strlen(NOTES_CHERRY_PICKED_TO),
+			       sizeof(hex));
+			       walk_cherry_picks(hex, sb, 1);*/
 	}
 
 	free(msg);
@@ -1308,4 +1319,62 @@ void expand_loose_notes_ref(struct strbuf *sb)
 		/* fallback to expand_notes_ref */
 		expand_notes_ref(sb);
 	}
+}
+
+void read_cherry_picks_note(const struct object_id *commit_oid,
+			    struct object_array *result)
+{
+	static struct notes_tree notes_tree;
+	const struct object_id *note_oid;
+	unsigned long size;
+	enum object_type type;
+	char *note;
+	struct strbuf **lines, **pline;
+
+	if (!notes_tree.initialized)
+		init_notes(&notes_tree, NOTES_CHERRY_PICKS_REF, NULL, 0);
+
+	note_oid = get_note(&notes_tree, commit_oid);
+	if (!note_oid)
+		return;
+
+	note = read_object_file(note_oid, &type, &size);
+	if (!size) {
+		free(note);
+		return;
+	}
+
+	lines = strbuf_split_buf(note, size, '\n', 0);
+
+	for (pline = lines; *pline; pline++) {
+		struct strbuf *line = *pline;
+		struct object *cherry_obj = NULL;
+		struct object_id cherry_oid;
+		const char *cherry_hex;
+
+		strbuf_trim(line);
+
+		if (!starts_with(line->buf, NOTES_CHERRY_PICKED_TO)) {
+			warning("read invalid cherry-pick note on %s: %s",
+				oid_to_hex(commit_oid), line->buf);
+			continue;
+		}
+
+		cherry_hex = line->buf + strlen(NOTES_CHERRY_PICKED_TO);
+
+		if (get_oid_hex(cherry_hex, &cherry_oid)) {
+			warning("read invalid cherry-pick sha1 on %s: %s",
+				oid_to_hex(commit_oid), line->buf);
+			continue;
+		}
+
+		cherry_obj = parse_object(the_repository, &cherry_oid);
+		if (cherry_obj->type != OBJ_COMMIT)
+			cherry_obj = NULL;
+
+		add_object_array(cherry_obj, cherry_hex, result);
+	}
+
+	strbuf_list_free(lines);
+	free(note);
 }

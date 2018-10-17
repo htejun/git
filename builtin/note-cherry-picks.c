@@ -4,6 +4,7 @@
 #include "repository.h"
 #include "config.h"
 #include "commit.h"
+#include "notes.h"
 #include "trailer.h"
 #include "revision.h"
 #include "argv-array.h"
@@ -22,7 +23,6 @@ static const char * const note_cherry_picks_usage[] = {
 static const char cherry_picked_prefix[] = "(cherry picked from commit ";
 static const char cherry_picked_to_tag[] = "Cherry-picked-to: ";
 static int verbose, override, clear;
-static struct notes_tree cherry_pick_notes_tree;
 static struct object_array cherry_picked = OBJECT_ARRAY_INIT;
 static struct commit_cherry_picks cherry_picks;
 
@@ -34,69 +34,12 @@ static struct object_array *get_commit_cherry_picks(struct commit *commit)
 	return slot ? *slot : NULL;
 }
 
-static void read_cherry_pick_note(struct commit *commit,
-				  struct object_array *cps)
-{
-	const struct object_id *note_oid;
-	unsigned long size;
-	enum object_type type;
-	char *note;
-	struct strbuf **lines, **pline;
-
-	note_oid = get_note(&cherry_pick_notes_tree, &commit->object.oid);
-
-	if (!note_oid)
-		return;
-
-	note = read_object_file(note_oid, &type, &size);
-	if (!size) {
-		free(note);
-		return;
-	}
-
-	lines = strbuf_split_buf(note, size, '\n', 0);
-
-	for (pline = lines; *pline; pline++) {
-		struct strbuf *line = *pline;
-		struct object *cherry_obj = NULL;
-		struct object_id cherry_oid;
-		const char *cherry_hex;
-
-		strbuf_trim(line);
-
-		if (!starts_with(line->buf, cherry_picked_to_tag)) {
-			warning("read invalid cherry-pick note on %s: %s",
-				oid_to_hex(&commit->object.oid), line->buf);
-			continue;
-		}
-
-		cherry_hex = line->buf + sizeof(cherry_picked_to_tag) - 1;
-
-		if (get_oid_hex(cherry_hex, &cherry_oid)) {
-			warning("read invalid cherry-pick sha1 on %s: %s",
-				oid_to_hex(&commit->object.oid), line->buf);
-			continue;
-		}
-
-		cherry_obj = parse_object(the_repository, &cherry_oid);
-		if (cherry_obj->type != OBJ_COMMIT)
-			cherry_obj = NULL;
-
-		add_object_array(cherry_obj, cherry_hex, cps);
-		if (verbose)
-			printf("read note %s -> %s\n",
-			       oid_to_hex(&commit->object.oid), cherry_hex);
-	}
-
-	strbuf_list_free(lines);
-	free(note);
-}
-
 static struct object_array *get_create_commit_cherry_picks(struct commit *commit)
 {
 	struct object_array **slot =
 		commit_cherry_picks_at(&cherry_picks, commit);
 	struct object_array *cps = *slot;
+	int i;
 
 	if (cps)
 		return cps;
@@ -106,8 +49,16 @@ static struct object_array *get_create_commit_cherry_picks(struct commit *commit
 	*slot = cps = xmalloc(sizeof(struct object_array));
 	*cps = (struct object_array)OBJECT_ARRAY_INIT;
 
-	if (!override)
-		read_cherry_pick_note(commit, cps);
+	if (override)
+		return cps;
+
+	read_cherry_picks_note(&commit->object.oid, cps);
+	if (verbose) {
+		for (i = 0; i < cps->nr; i++)
+			printf("read note %s -> %s\n",
+			       oid_to_hex(&commit->object.oid),
+			       cps->objects[i].name);
+	}
 	return cps;
 }
 
@@ -185,7 +136,7 @@ static int note_cherry_picks(struct commit *commit, const char *prefix)
 	for (i = 0; i < cps->nr; i++) {
 		const char *cherry_hex = cps->objects[i].name;
 
-		strbuf_addf(&note, "%s%s\n", cherry_picked_to_tag, cherry_hex);
+		strbuf_addf(&note, "%s%s\n", NOTES_CHERRY_PICKED_TO, cherry_hex);
 		if (verbose)
 			printf("noting %s -> %s\n", from_hex, cherry_hex);
 	}
@@ -231,7 +182,6 @@ int cmd_note_cherry_picks(int argc, const char **argv, const char *prefix)
 		return 0;
 	}
 
-	init_notes(&cherry_pick_notes_tree, "refs/notes/cherry-picks", NULL, 0);
 	init_commit_cherry_picks(&cherry_picks);
 	traverse_commit_list(&revs, record_cherry_pick, NULL, NULL);
 
