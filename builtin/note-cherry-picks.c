@@ -22,7 +22,7 @@ static const char * const note_cherry_picks_usage[] = {
 
 static const char cherry_picked_prefix[] = "(cherry picked from commit ";
 static const char cherry_picked_to_tag[] = "Cherry-picked-to: ";
-static int verbose, override, clear;
+static int verbose, clear;
 static struct object_array cherry_picked = OBJECT_ARRAY_INIT;
 static struct commit_cherry_picks cherry_picks;
 
@@ -49,15 +49,12 @@ static struct object_array *get_create_commit_cherry_picks(struct commit *commit
 	*slot = cps = xmalloc(sizeof(struct object_array));
 	*cps = (struct object_array)OBJECT_ARRAY_INIT;
 
-	if (override)
-		return cps;
-
 	read_cherry_picks_note(&commit->object.oid, cps);
 	if (verbose) {
 		for (i = 0; i < cps->nr; i++)
-			printf("read note %s -> %s\n",
-			       oid_to_hex(&commit->object.oid),
-			       cps->objects[i].name);
+			fprintf(stderr, "Read  note %s -> %s\n",
+				oid_to_hex(&commit->object.oid),
+				cps->objects[i].name);
 	}
 	return cps;
 }
@@ -138,12 +135,15 @@ static int note_cherry_picks(struct commit *commit, const char *prefix)
 
 		strbuf_addf(&note, "%s%s\n", NOTES_CHERRY_PICKED_TO, cherry_hex);
 		if (verbose)
-			printf("noting %s -> %s\n", from_hex, cherry_hex);
+			fprintf(stderr, "Write note %s -> %s\n",
+				from_hex, cherry_hex);
 	}
 
 	argv_array_init(&args);
 	argv_array_pushl(&args, "notes", "--ref", "cherry-picks", "add",
 			 "--force", "--message", note.buf, from_hex, NULL);
+	if (!verbose)
+		argv_array_push(&args, "--quiet");
 	ret = cmd_notes(args.argc, args.argv, prefix);
 	strbuf_release(&note);
 	return ret;
@@ -158,7 +158,6 @@ int cmd_note_cherry_picks(int argc, const char **argv, const char *prefix)
 		.revarg_opt = REVARG_CANNOT_BE_FILENAME
 	};
 	struct option options[] = {
-		OPT_BOOL(0, "override", &override, N_("override existing cherry-pick notes")),
 		OPT_BOOL(0, "clear", &clear, N_("clear cherry-pick notes from the specified commits")),
 		OPT__VERBOSE(&verbose, N_("verbose")),
 		OPT_END()

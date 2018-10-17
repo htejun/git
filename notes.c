@@ -1371,9 +1371,9 @@ void read_cherry_picks_note(const struct object_id *commit_oid,
 
 	for (pline = lines; *pline; pline++) {
 		struct strbuf *line = *pline;
-		struct object *cherry_obj = NULL;
-		struct object_id cherry_oid;
 		const char *cherry_hex;
+		struct object_id cherry_oid;
+		struct object *cherry_obj;
 
 		strbuf_trim(line);
 
@@ -1392,8 +1392,11 @@ void read_cherry_picks_note(const struct object_id *commit_oid,
 		}
 
 		cherry_obj = parse_object(the_repository, &cherry_oid);
-		if (cherry_obj->type != OBJ_COMMIT)
-			cherry_obj = NULL;
+		if (!cherry_obj || cherry_obj->type != OBJ_COMMIT) {
+			warning("read invalid cherry-pick commit on %s: %s",
+				oid_to_hex(commit_oid), line->buf);
+			continue;
+		}
 
 		add_object_array(cherry_obj, cherry_hex, result);
 	}
