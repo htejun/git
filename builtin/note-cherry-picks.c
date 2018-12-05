@@ -49,7 +49,8 @@ static struct object_array *get_create_commit_cherry_picks(struct commit *commit
 	*slot = cps = xmalloc(sizeof(struct object_array));
 	*cps = (struct object_array)OBJECT_ARRAY_INIT;
 
-	read_cherry_picks_note(&commit->object.oid, cps);
+	read_xref_note(NOTES_CHERRY_PICKS_REF, NOTES_CHERRY_PICKED_TO,
+		       &commit->object.oid, cps);
 	if (verbose) {
 		for (i = 0; i < cps->nr; i++)
 			fprintf(stderr, "Read  note %s -> %s\n",

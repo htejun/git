@@ -9,6 +9,7 @@
 #include "tree-walk.h"
 #include "string-list.h"
 #include "refs.h"
+#include "hashmap.h"
 
 /*
  * Use a non-balancing simple 16-tree structure with struct int_node as
@@ -1195,7 +1196,8 @@ static void walk_cherry_picks(struct object_id *from_oid, struct strbuf *sb,
 	struct object_array cps = OBJECT_ARRAY_INIT;
 	int i;
 
-	read_cherry_picks_note(from_oid, &cps);
+	read_xref_note(NOTES_CHERRY_PICKS_REF, NOTES_CHERRY_PICKED_TO,
+		       from_oid, &cps);
 
 	for (i = 0; i < cps.nr; i++) {
 		strbuf_addf(sb, "    %s%*s%s\n",
@@ -1344,20 +1346,56 @@ void expand_loose_notes_ref(struct strbuf *sb)
 	}
 }
 
-void read_cherry_picks_note(const struct object_id *commit_oid,
-			    struct object_array *result)
+struct notes_tree_entry {
+	struct hashmap_entry ent;
+	struct notes_tree tree;
+};
+
+static int notes_tree_cmp(const void *hashmap_cmp_fn_data,
+			  const void *entry, const void *entry_or_key,
+			  const void *keydata)
 {
-	static struct notes_tree notes_tree;
+	const struct notes_tree_entry *e1 = entry;
+	const struct notes_tree_entry *e2 = entry_or_key;
+
+	return strcmp(e1->tree.ref, e2->tree.ref);
+}
+
+/*
+ * Read a cross-referencing note.
+ *
+ * Notes in @notes_ref contains lines of "@prefix $OID" pointing to other
+ * commits.  Read the target commits and add the objects to @result.
+ */
+void read_xref_note(const char *notes_ref, const char *prefix,
+		    const struct object_id *commit_oid,
+		    struct object_array *result)
+{
+	static struct hashmap *notes_tree_map = NULL;
+	unsigned hash = memhash(notes_ref, strlen(notes_ref));
+	struct notes_tree_entry key, *ent;
 	const struct object_id *note_oid;
 	unsigned long size;
 	enum object_type type;
 	char *note;
 	struct strbuf **lines, **pline;
 
-	if (!notes_tree.initialized)
-		init_notes(&notes_tree, NOTES_CHERRY_PICKS_REF, NULL, 0);
+	if (!notes_tree_map) {
+		notes_tree_map = xcalloc(1, sizeof(struct hashmap));
+		hashmap_init(notes_tree_map, notes_tree_cmp, NULL, 0);
+	}
 
-	note_oid = get_note(&notes_tree, commit_oid);
+	hashmap_entry_init(&key.ent, hash);
+	key.tree.ref = (char *)notes_ref;
+	ent = hashmap_get(notes_tree_map, &key, NULL);
+	if (!ent) {
+		ent = xcalloc(1, sizeof(struct notes_tree_entry));
+		init_notes(&ent->tree, notes_ref, NULL, 0);
+		hashmap_entry_init(&ent->ent, hash);
+		hashmap_put(notes_tree_map, ent);
+	}
+
+	note_oid = get_note(&ent->tree, commit_oid);
 	if (!note_oid)
 		return;
 
@@ -1371,34 +1409,34 @@ void read_cherry_picks_note(const struct object_id *commit_oid,
 
 	for (pline = lines; *pline; pline++) {
 		struct strbuf *line = *pline;
-		const char *cherry_hex;
-		struct object_id cherry_oid;
-		struct object *cherry_obj;
+		const char *target_hex;
+		struct object_id target_oid;
+		struct object *target_obj;
 
 		strbuf_trim(line);
 
-		if (!starts_with(line->buf, NOTES_CHERRY_PICKED_TO)) {
-			warning("read invalid cherry-pick note on %s: %s",
+		if (!starts_with(line->buf, prefix)) {
+			warning("read invalid %s note on %s: %s",
+				notes_ref, oid_to_hex(commit_oid), line->buf);
+			continue;
+		}
+
+		target_hex = line->buf + strlen(prefix);
+
+		if (get_oid_hex(target_hex, &target_oid)) {
+			warning("read invalid sha1 on %s: %s",
 				oid_to_hex(commit_oid), line->buf);
 			continue;
 		}
 
-		cherry_hex = line->buf + strlen(NOTES_CHERRY_PICKED_TO);
-
-		if (get_oid_hex(cherry_hex, &cherry_oid)) {
-			warning("read invalid cherry-pick sha1 on %s: %s",
+		target_obj = parse_object(the_repository, &target_oid);
+		if (!target_obj || target_obj->type != OBJ_COMMIT) {
+			warning("read invalid commit on %s: %s",
 				oid_to_hex(commit_oid), line->buf);
 			continue;
 		}
 
-		cherry_obj = parse_object(the_repository, &cherry_oid);
-		if (!cherry_obj || cherry_obj->type != OBJ_COMMIT) {
-			warning("read invalid cherry-pick commit on %s: %s",
-				oid_to_hex(commit_oid), line->buf);
-			continue;
-		}
-
-		add_object_array(cherry_obj, cherry_hex, result);
+		add_object_array(target_obj, target_hex, result);
 	}
 
 	strbuf_list_free(lines);
