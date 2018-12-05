@@ -1196,7 +1196,7 @@ static void walk_cherry_picks(struct object_id *from_oid, struct strbuf *sb,
 	struct object_array cps = OBJECT_ARRAY_INIT;
 	int i;
 
-	read_xref_note(NOTES_CHERRY_PICKS_REF, from_oid, &cps);
+	read_xref_note(NOTES_CHERRY_PICKS_REF, from_oid, &cps, NULL);
 
 	for (i = 0; i < cps.nr; i++) {
 		strbuf_addf(sb, "    %s%*s%s\n",
@@ -1364,10 +1364,14 @@ static int notes_tree_cmp(const void *hashmap_cmp_fn_data,
  * Read a cross-referencing note.
  *
  * Notes in @notes_ref contains lines of "[PREFIX] OID" pointing to other
- * commits.  Read the target commits and add the objects to @result.
+ * commits.  Read the target commits and add the objects to @result.  If
+ * @result_lines is non-NULL, it should point to a STRING_LIST_INIT_DUP
+ * string_list.  The verbatim note lines matching the target commits are
+ * appened to the list.
  */
 void read_xref_note(const char *notes_ref, const struct object_id *commit_oid,
-		    struct object_array *result)
+		    struct object_array *result,
+		    struct string_list *result_lines)
 {
 	static struct hashmap *notes_tree_map = NULL;
 	unsigned hash = memhash(notes_ref, strlen(notes_ref));
@@ -1411,7 +1415,9 @@ void read_xref_note(const char *notes_ref, const struct object_id *commit_oid,
 		struct object_id target_oid;
 		struct object *target_obj;
 
-		strbuf_trim(line);
+		strbuf_rtrim(line);
+		if (!line->len)
+			continue;
 
 		target_hex = strrchr(line->buf, ' ');
 		if (target_hex)
@@ -1433,6 +1439,10 @@ void read_xref_note(const char *notes_ref, const struct object_id *commit_oid,
 		}
 
 		add_object_array(target_obj, target_hex, result);
+		if (result_lines) {
+			assert(result_lines->strdup_strings);
+			string_list_append(result_lines, line->buf);
+		}
 	}
 
 	strbuf_list_free(lines);
