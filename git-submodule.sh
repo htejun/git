@@ -72,7 +72,7 @@ get_submodule_config () {
 	value=$(git config submodule."$name"."$option")
 	if test -z "$value"
 	then
-		value=$(git config -f .gitmodules submodule."$name"."$option")
+		value=$(git submodule--helper config submodule."$name"."$option")
 	fi
 	printf '%s' "${value:-$default}"
 }
@@ -80,6 +80,11 @@ get_submodule_config () {
 isnumber()
 {
 	n=$(($1 + 0)) 2>/dev/null && test "$n" = "$1"
+}
+
+# Given a full hex object ID, is this the zero OID?
+is_zero_oid () {
+	echo "$1" | sane_egrep '^0+$' >/dev/null 2>&1
 }
 
 # Sanitize the local git environment for use within a submodule. We
@@ -158,6 +163,11 @@ cmd_add()
 		esac
 		shift
 	done
+
+	if ! git submodule--helper config --check-writeable >/dev/null 2>&1
+	then
+		 die "$(eval_gettext "please make sure that the .gitmodules file is in the working tree")"
+	fi
 
 	if test -n "$reference_path"
 	then
@@ -283,11 +293,11 @@ or you are unsure what this means choose another name with the '--name' option."
 	git add --no-warn-embedded-repo $force "$sm_path" ||
 	die "$(eval_gettext "Failed to add submodule '\$sm_path'")"
 
-	git config -f .gitmodules submodule."$sm_name".path "$sm_path" &&
-	git config -f .gitmodules submodule."$sm_name".url "$repo" &&
+	git submodule--helper config submodule."$sm_name".path "$sm_path" &&
+	git submodule--helper config submodule."$sm_name".url "$repo" &&
 	if test -n "$branch"
 	then
-		git config -f .gitmodules submodule."$sm_name".branch "$branch"
+		git submodule--helper config submodule."$sm_name".branch "$branch"
 	fi &&
 	git add --force .gitmodules ||
 	die "$(eval_gettext "Failed to register submodule '\$sm_path'")"
@@ -780,7 +790,7 @@ cmd_summary() {
 	while read -r mod_src mod_dst sha1_src sha1_dst status name
 	do
 		if test -z "$cached" &&
-			test $sha1_dst = 0000000000000000000000000000000000000000
+			is_zero_oid $sha1_dst
 		then
 			case "$mod_dst" in
 			160000)

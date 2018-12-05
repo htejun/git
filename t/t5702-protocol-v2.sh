@@ -29,7 +29,7 @@ test_expect_success 'list refs with git:// using protocol v2' '
 	grep "git< version 2" log &&
 
 	git ls-remote --symref "$GIT_DAEMON_URL/parent" >expect &&
-	test_cmp actual expect
+	test_cmp expect actual
 '
 
 test_expect_success 'ref advertisment is filtered with ls-remote using protocol v2' '
@@ -42,7 +42,7 @@ test_expect_success 'ref advertisment is filtered with ls-remote using protocol 
 	$(git -C "$daemon_parent" rev-parse refs/heads/master)$(printf "\t")refs/heads/master
 	EOF
 
-	test_cmp actual expect
+	test_cmp expect actual
 '
 
 test_expect_success 'clone with git:// using protocol v2' '
@@ -77,6 +77,19 @@ test_expect_success 'fetch with git:// using protocol v2' '
 	grep "fetch> .*\\\0\\\0version=2\\\0$" log &&
 	# Server responded using protocol v2
 	grep "fetch< version 2" log
+'
+
+test_expect_success 'fetch by hash without tag following with protocol v2 does not list refs' '
+	test_when_finished "rm -f log" &&
+
+	test_commit -C "$daemon_parent" two_a &&
+	git -C "$daemon_parent" rev-parse two_a >two_a_hash &&
+
+	GIT_TRACE_PACKET="$(pwd)/log" git -C daemon_child -c protocol.version=2 \
+		fetch --no-tags origin $(cat two_a_hash) &&
+
+	grep "fetch< version 2" log &&
+	! grep "fetch> command=ls-refs" log
 '
 
 test_expect_success 'pull with git:// using protocol v2' '
@@ -138,7 +151,7 @@ test_expect_success 'list refs with file:// using protocol v2' '
 	grep "git< version 2" log &&
 
 	git ls-remote --symref "file://$(pwd)/file_parent" >expect &&
-	test_cmp actual expect
+	test_cmp expect actual
 '
 
 test_expect_success 'ref advertisment is filtered with ls-remote using protocol v2' '
@@ -151,7 +164,7 @@ test_expect_success 'ref advertisment is filtered with ls-remote using protocol 
 	$(git -C file_parent rev-parse refs/heads/master)$(printf "\t")refs/heads/master
 	EOF
 
-	test_cmp actual expect
+	test_cmp expect actual
 '
 
 test_expect_success 'server-options are sent when using ls-remote' '
@@ -164,7 +177,7 @@ test_expect_success 'server-options are sent when using ls-remote' '
 	$(git -C file_parent rev-parse refs/heads/master)$(printf "\t")refs/heads/master
 	EOF
 
-	test_cmp actual expect &&
+	test_cmp expect actual &&
 	grep "server-option=hello" log &&
 	grep "server-option=world" log
 '
@@ -271,7 +284,7 @@ test_expect_success 'partial clone' '
 	grep "version 2" trace &&
 
 	# Ensure that the old version of the file is missing
-	git -C client rev-list master --quiet --objects --missing=print \
+	git -C client rev-list --quiet --objects --missing=print master \
 		>observed.oids &&
 	grep "$(git -C server rev-parse message1:a.txt)" observed.oids &&
 
@@ -286,6 +299,10 @@ test_expect_success 'dynamically fetch missing object' '
 	grep "version 2" trace
 '
 
+test_expect_success 'when dynamically fetching missing object, do not list refs' '
+	! grep "git> command=ls-refs" trace
+'
+
 test_expect_success 'partial fetch' '
 	rm -rf client "$(pwd)/trace" &&
 	git init client &&
@@ -297,7 +314,7 @@ test_expect_success 'partial fetch' '
 	grep "version 2" trace &&
 
 	# Ensure that the old version of the file is missing
-	git -C client rev-list other --quiet --objects --missing=print \
+	git -C client rev-list --quiet --objects --missing=print other \
 		>observed.oids &&
 	grep "$(git -C server rev-parse message1:a.txt)" observed.oids &&
 
@@ -429,6 +446,31 @@ test_expect_success 'fetch supports include-tag and tag following' '
 	git -C client cat-file -e $(git -C client rev-parse annotated_tag)
 '
 
+test_expect_success 'upload-pack respects client shallows' '
+	rm -rf server client trace &&
+
+	git init server &&
+	test_commit -C server base &&
+	test_commit -C server client_has &&
+
+	git clone --depth=1 "file://$(pwd)/server" client &&
+
+	# Add extra commits to the client so that the whole fetch takes more
+	# than 1 request (due to negotiation)
+	for i in $(test_seq 1 32)
+	do
+		test_commit -C client c$i
+	done &&
+
+	git -C server checkout -b newbranch base &&
+	test_commit -C server client_wants &&
+
+	GIT_TRACE_PACKET="$(pwd)/trace" git -C client -c protocol.version=2 \
+		fetch origin newbranch &&
+	# Ensure that protocol v2 is used
+	grep "fetch< version 2" trace
+'
+
 # Test protocol v2 with 'http://' transport
 #
 . "$TEST_DIRECTORY"/lib-httpd.sh
@@ -495,6 +537,56 @@ test_expect_success 'push with http:// and a config of v2 does not request v2' '
 	! grep "git< version 2" log
 '
 
+test_expect_success 'when server sends "ready", expect DELIM' '
+	rm -rf "$HTTPD_DOCUMENT_ROOT_PATH/http_parent" http_child &&
+
+	git init "$HTTPD_DOCUMENT_ROOT_PATH/http_parent" &&
+	test_commit -C "$HTTPD_DOCUMENT_ROOT_PATH/http_parent" one &&
+
+	git clone "$HTTPD_URL/smart/http_parent" http_child &&
+
+	test_commit -C "$HTTPD_DOCUMENT_ROOT_PATH/http_parent" two &&
+
+	# After "ready" in the acknowledgments section, pretend that a FLUSH
+	# (0000) was sent instead of a DELIM (0001).
+	printf "/ready/,$ s/0001/0000/" \
+		>"$HTTPD_ROOT_PATH/one-time-sed" &&
+
+	test_must_fail git -C http_child -c protocol.version=2 \
+		fetch "$HTTPD_URL/one_time_sed/http_parent" 2> err &&
+	test_i18ngrep "expected packfile to be sent after .ready." err
+'
+
+test_expect_success 'when server does not send "ready", expect FLUSH' '
+	rm -rf "$HTTPD_DOCUMENT_ROOT_PATH/http_parent" http_child log &&
+
+	git init "$HTTPD_DOCUMENT_ROOT_PATH/http_parent" &&
+	test_commit -C "$HTTPD_DOCUMENT_ROOT_PATH/http_parent" one &&
+
+	git clone "$HTTPD_URL/smart/http_parent" http_child &&
+
+	test_commit -C "$HTTPD_DOCUMENT_ROOT_PATH/http_parent" two &&
+
+	# Create many commits to extend the negotiation phase across multiple
+	# requests, so that the server does not send "ready" in the first
+	# request.
+	for i in $(test_seq 1 32)
+	do
+		test_commit -C http_child c$i
+	done &&
+
+	# After the acknowledgments section, pretend that a DELIM
+	# (0001) was sent instead of a FLUSH (0000).
+	printf "/acknowledgments/,$ s/0000/0001/" \
+		>"$HTTPD_ROOT_PATH/one-time-sed" &&
+
+	test_must_fail env GIT_TRACE_PACKET="$(pwd)/log" git -C http_child \
+		-c protocol.version=2 \
+		fetch "$HTTPD_URL/one_time_sed/http_parent" 2> err &&
+	grep "fetch< acknowledgments" log &&
+	! grep "fetch< ready" log &&
+	test_i18ngrep "expected no other sections to be sent after no .ready." err
+'
 
 stop_httpd
 

@@ -1,5 +1,5 @@
-#ifndef __TEST_TOOL_H__
-#define __TEST_TOOL_H__
+#ifndef TEST_TOOL_H
+#define TEST_TOOL_H
 
 #include "git-compat-util.h"
 
@@ -42,6 +42,7 @@ int cmd__sigchain(int argc, const char **argv);
 int cmd__strcmp_offset(int argc, const char **argv);
 int cmd__string_list(int argc, const char **argv);
 int cmd__submodule_config(int argc, const char **argv);
+int cmd__submodule_nested_repo_config(int argc, const char **argv);
 int cmd__subprocess(int argc, const char **argv);
 int cmd__urlmatch_normalization(int argc, const char **argv);
 int cmd__wildmatch(int argc, const char **argv);

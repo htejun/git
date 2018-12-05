@@ -1249,7 +1249,7 @@ test_expect_success 'teardown after ref completion' '
 
 test_path_completion ()
 {
-	test $# = 2 || error "bug in the test script: not 2 parameters to test_path_completion"
+	test $# = 2 || BUG "not 2 parameters to test_path_completion"
 
 	local cur="$1" expected="$2"
 	echo "$expected" >expected &&
@@ -1697,7 +1697,8 @@ test_expect_success 'sourcing the completion script clears cached commands' '
 	verbose test -z "$__git_all_commands"
 '
 
-test_expect_success !GETTEXT_POISON 'sourcing the completion script clears cached merge strategies' '
+test_expect_success 'sourcing the completion script clears cached merge strategies' '
+	GIT_TEST_GETTEXT_POISON= &&
 	__git_compute_merge_strategies &&
 	verbose test -n "$__git_merge_strategies" &&
 	. "$GIT_BUILD_DIR/contrib/completion/git-completion.bash" &&

@@ -101,6 +101,41 @@ test_expect_success 'HEAD link pointing at a funny place' '
 	grep "HEAD points to something strange" out
 '
 
+test_expect_success 'HEAD link pointing at a funny object (from different wt)' '
+	test_when_finished "mv .git/SAVED_HEAD .git/HEAD" &&
+	test_when_finished "rm -rf .git/worktrees wt" &&
+	git worktree add wt &&
+	mv .git/HEAD .git/SAVED_HEAD &&
+	echo $ZERO_OID >.git/HEAD &&
+	# avoid corrupt/broken HEAD from interfering with repo discovery
+	test_must_fail git -C wt fsck 2>out &&
+	grep "main-worktree/HEAD: detached HEAD points" out
+'
+
+test_expect_success 'other worktree HEAD link pointing at a funny object' '
+	test_when_finished "rm -rf .git/worktrees other" &&
+	git worktree add other &&
+	echo $ZERO_OID >.git/worktrees/other/HEAD &&
+	test_must_fail git fsck 2>out &&
+	grep "worktrees/other/HEAD: detached HEAD points" out
+'
+
+test_expect_success 'other worktree HEAD link pointing at missing object' '
+	test_when_finished "rm -rf .git/worktrees other" &&
+	git worktree add other &&
+	echo "Contents missing from repo" | git hash-object --stdin >.git/worktrees/other/HEAD &&
+	test_must_fail git fsck 2>out &&
+	grep "worktrees/other/HEAD: invalid sha1 pointer" out
+'
+
+test_expect_success 'other worktree HEAD link pointing at a funny place' '
+	test_when_finished "rm -rf .git/worktrees other" &&
+	git worktree add other &&
+	echo "ref: refs/funny/place" >.git/worktrees/other/HEAD &&
+	test_must_fail git fsck 2>out &&
+	grep "worktrees/other/HEAD points to something strange" out
+'
+
 test_expect_success 'email without @ is okay' '
 	git cat-file commit HEAD >basis &&
 	sed "s/@/AT/" basis >okay &&
@@ -673,14 +708,33 @@ test_expect_success 'fsck detects trailing loose garbage (commit)' '
 	test_i18ngrep "garbage.*$commit" out
 '
 
-test_expect_success 'fsck detects trailing loose garbage (blob)' '
+test_expect_success 'fsck detects trailing loose garbage (large blob)' '
 	blob=$(echo trailing | git hash-object -w --stdin) &&
 	file=$(sha1_file $blob) &&
 	test_when_finished "remove_object $blob" &&
 	chmod +w "$file" &&
 	echo garbage >>"$file" &&
-	test_must_fail git fsck 2>out &&
+	test_must_fail git -c core.bigfilethreshold=5 fsck 2>out &&
 	test_i18ngrep "garbage.*$blob" out
+'
+
+test_expect_success 'fsck detects truncated loose object' '
+	# make it big enough that we know we will truncate in the data
+	# portion, not the header
+	test-tool genrandom truncate 4096 >file &&
+	blob=$(git hash-object -w file) &&
+	file=$(sha1_file $blob) &&
+	test_when_finished "remove_object $blob" &&
+	test_copy_bytes 1024 <"$file" >tmp &&
+	rm "$file" &&
+	mv -f tmp "$file" &&
+
+	# check both regular and streaming code paths
+	test_must_fail git fsck 2>out &&
+	test_i18ngrep corrupt.*$blob out &&
+
+	test_must_fail git -c core.bigfilethreshold=128 fsck 2>out &&
+	test_i18ngrep corrupt.*$blob out
 '
 
 # for each of type, we have one version which is referenced by another object

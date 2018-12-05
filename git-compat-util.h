@@ -146,8 +146,8 @@
 #define _SGI_SOURCE 1
 
 #if defined(WIN32) && !defined(__CYGWIN__) /* Both MinGW and MSVC */
-# if defined (_MSC_VER) && !defined(_WIN32_WINNT)
-#  define _WIN32_WINNT 0x0502
+# if !defined(_WIN32_WINNT)
+#  define _WIN32_WINNT 0x0600
 # endif
 #define WIN32_LEAN_AND_MEAN  /* stops windows.h including winsock.h */
 #include <winsock2.h>
@@ -180,9 +180,12 @@
 #include <regex.h>
 #include <utime.h>
 #include <syslog.h>
-#ifndef NO_SYS_POLL_H
+#if !defined(NO_POLL_H)
+#include <poll.h>
+#elif !defined(NO_SYS_POLL_H)
 #include <sys/poll.h>
 #else
+/* Pull the compat stuff */
 #include <poll.h>
 #endif
 #ifdef HAVE_BSD_SYSCTL
@@ -342,6 +345,14 @@ typedef uintmax_t timestamp_t;
 #define _PATH_DEFPATH "/usr/local/bin:/usr/bin:/bin"
 #endif
 
+#ifndef platform_core_config
+static inline int noop_core_config(const char *var, const char *value, void *cb)
+{
+	return 0;
+}
+#define platform_core_config noop_core_config
+#endif
+
 #ifndef has_dos_drive_prefix
 static inline int git_has_dos_drive_prefix(const char *path)
 {
@@ -382,6 +393,10 @@ static inline char *git_find_last_dir_sep(const char *path)
 #define find_last_dir_sep git_find_last_dir_sep
 #endif
 
+#ifndef query_user_email
+#define query_user_email() NULL
+#endif
+
 #if defined(__HP_cc) && (__HP_cc >= 61000)
 #define NORETURN __attribute__((noreturn))
 #define NORETURN_PTR
@@ -407,6 +422,8 @@ static inline char *git_find_last_dir_sep(const char *path)
 #else
 #define LAST_ARG_MUST_BE_NULL
 #endif
+
+#define MAYBE_UNUSED __attribute__((__unused__))
 
 #include "compat/bswap.h"
 
@@ -844,6 +861,7 @@ extern FILE *fopen_or_warn(const char *path, const char *mode);
 #define FREE_AND_NULL(p) do { free(p); (p) = NULL; } while (0)
 
 #define ALLOC_ARRAY(x, alloc) (x) = xmalloc(st_mult(sizeof(*(x)), (alloc)))
+#define CALLOC_ARRAY(x, alloc) (x) = xcalloc((alloc), sizeof(*(x)));
 #define REALLOC_ARRAY(x, alloc) (x) = xrealloc((x), st_mult(sizeof(*(x)), (alloc)))
 
 #define COPY_ARRAY(dst, src, n) copy_array((dst), (src), (n), sizeof(*(dst)) + \

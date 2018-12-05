@@ -34,7 +34,6 @@ static int recurse_submodules;
 #define GREP_NUM_THREADS_DEFAULT 8
 static int num_threads;
 
-#ifndef NO_PTHREADS
 static pthread_t *threads;
 
 /* We use one producer thread and THREADS consumer
@@ -70,13 +69,11 @@ static pthread_mutex_t grep_mutex;
 
 static inline void grep_lock(void)
 {
-	assert(num_threads);
 	pthread_mutex_lock(&grep_mutex);
 }
 
 static inline void grep_unlock(void)
 {
-	assert(num_threads);
 	pthread_mutex_unlock(&grep_mutex);
 }
 
@@ -103,7 +100,8 @@ static void add_work(struct grep_opt *opt, const struct grep_source *gs)
 
 	todo[todo_end].source = *gs;
 	if (opt->binary != GREP_BINARY_TEXT)
-		grep_source_load_driver(&todo[todo_end].source);
+		grep_source_load_driver(&todo[todo_end].source,
+					opt->repo->index);
 	todo[todo_end].done = 0;
 	strbuf_reset(&todo[todo_end].out);
 	todo_end = (todo_end + 1) % ARRAY_SIZE(todo);
@@ -233,6 +231,9 @@ static int wait_all(void)
 	int hit = 0;
 	int i;
 
+	if (!HAVE_THREADS)
+		BUG("Never call this function unless you have started threads");
+
 	grep_lock();
 	all_work_added = 1;
 
@@ -264,13 +265,6 @@ static int wait_all(void)
 
 	return hit;
 }
-#else /* !NO_PTHREADS */
-
-static int wait_all(void)
-{
-	return 0;
-}
-#endif
 
 static int grep_cmd_config(const char *var, const char *value, void *cb)
 {
@@ -283,17 +277,15 @@ static int grep_cmd_config(const char *var, const char *value, void *cb)
 		if (num_threads < 0)
 			die(_("invalid number of threads specified (%d) for %s"),
 			    num_threads, var);
-#ifdef NO_PTHREADS
-		else if (num_threads && num_threads != 1) {
+		else if (!HAVE_THREADS && num_threads > 1) {
 			/*
 			 * TRANSLATORS: %s is the configuration
 			 * variable for tweaking threads, currently
 			 * grep.threads
 			 */
 			warning(_("no threads support, ignoring %s"), var);
-			num_threads = 0;
+			num_threads = 1;
 		}
-#endif
 	}
 
 	if (!strcmp(var, "submodule.recurse"))
@@ -329,17 +321,14 @@ static int grep_oid(struct grep_opt *opt, const struct object_id *oid,
 	grep_source_init(&gs, GREP_SOURCE_OID, pathbuf.buf, path, oid);
 	strbuf_release(&pathbuf);
 
-#ifndef NO_PTHREADS
-	if (num_threads) {
+	if (num_threads > 1) {
 		/*
 		 * add_work() copies gs and thus assumes ownership of
 		 * its fields, so do not call grep_source_clear()
 		 */
 		add_work(opt, &gs);
 		return 0;
-	} else
-#endif
-	{
+	} else {
 		int hit;
 
 		hit = grep_source(opt, &gs);
@@ -362,17 +351,14 @@ static int grep_file(struct grep_opt *opt, const char *filename)
 	grep_source_init(&gs, GREP_SOURCE_FILE, buf.buf, filename, filename);
 	strbuf_release(&buf);
 
-#ifndef NO_PTHREADS
-	if (num_threads) {
+	if (num_threads > 1) {
 		/*
 		 * add_work() copies gs and thus assumes ownership of
 		 * its fields, so do not call grep_source_clear()
 		 */
 		add_work(opt, &gs);
 		return 0;
-	} else
-#endif
-	{
+	} else {
 		int hit;
 
 		hit = grep_source(opt, &gs);
@@ -421,11 +407,23 @@ static int grep_submodule(struct grep_opt *opt, struct repository *superproject,
 	struct repository submodule;
 	int hit;
 
-	if (!is_submodule_active(superproject, path))
-		return 0;
+	/*
+	 * NEEDSWORK: submodules functions need to be protected because they
+	 * access the object store via config_from_gitmodules(): the latter
+	 * uses get_oid() which, for now, relies on the global the_repository
+	 * object.
+	 */
+	grep_read_lock();
 
-	if (repo_submodule_init(&submodule, superproject, path))
+	if (!is_submodule_active(superproject, path)) {
+		grep_read_unlock();
 		return 0;
+	}
+
+	if (repo_submodule_init(&submodule, superproject, path)) {
+		grep_read_unlock();
+		return 0;
+	}
 
 	repo_read_gitmodules(&submodule);
 
@@ -439,7 +437,6 @@ static int grep_submodule(struct grep_opt *opt, struct repository *superproject,
 	 * store is no longer global and instead is a member of the repository
 	 * object.
 	 */
-	grep_read_lock();
 	add_to_alternates_memory(submodule.objects->objectdir);
 	grep_read_unlock();
 
@@ -711,11 +708,14 @@ static int context_callback(const struct option *opt, const char *arg,
 static int file_callback(const struct option *opt, const char *arg, int unset)
 {
 	struct grep_opt *grep_opt = opt->value;
-	int from_stdin = !strcmp(arg, "-");
+	int from_stdin;
 	FILE *patterns;
 	int lno = 0;
 	struct strbuf sb = STRBUF_INIT;
 
+	BUG_ON_OPT_NEG(unset);
+
+	from_stdin = !strcmp(arg, "-");
 	patterns = from_stdin ? stdin : fopen(arg, "r");
 	if (!patterns)
 		die_errno(_("cannot open '%s'"), arg);
@@ -736,6 +736,8 @@ static int file_callback(const struct option *opt, const char *arg, int unset)
 static int not_callback(const struct option *opt, const char *arg, int unset)
 {
 	struct grep_opt *grep_opt = opt->value;
+	BUG_ON_OPT_NEG(unset);
+	BUG_ON_OPT_ARG(arg);
 	append_grep_pattern(grep_opt, "--not", "command line", 0, GREP_NOT);
 	return 0;
 }
@@ -743,6 +745,8 @@ static int not_callback(const struct option *opt, const char *arg, int unset)
 static int and_callback(const struct option *opt, const char *arg, int unset)
 {
 	struct grep_opt *grep_opt = opt->value;
+	BUG_ON_OPT_NEG(unset);
+	BUG_ON_OPT_ARG(arg);
 	append_grep_pattern(grep_opt, "--and", "command line", 0, GREP_AND);
 	return 0;
 }
@@ -750,6 +754,8 @@ static int and_callback(const struct option *opt, const char *arg, int unset)
 static int open_callback(const struct option *opt, const char *arg, int unset)
 {
 	struct grep_opt *grep_opt = opt->value;
+	BUG_ON_OPT_NEG(unset);
+	BUG_ON_OPT_ARG(arg);
 	append_grep_pattern(grep_opt, "(", "command line", 0, GREP_OPEN_PAREN);
 	return 0;
 }
@@ -757,6 +763,8 @@ static int open_callback(const struct option *opt, const char *arg, int unset)
 static int close_callback(const struct option *opt, const char *arg, int unset)
 {
 	struct grep_opt *grep_opt = opt->value;
+	BUG_ON_OPT_NEG(unset);
+	BUG_ON_OPT_ARG(arg);
 	append_grep_pattern(grep_opt, ")", "command line", 0, GREP_CLOSE_PAREN);
 	return 0;
 }
@@ -765,6 +773,7 @@ static int pattern_callback(const struct option *opt, const char *arg,
 			    int unset)
 {
 	struct grep_opt *grep_opt = opt->value;
+	BUG_ON_OPT_NEG(unset);
 	append_grep_pattern(grep_opt, arg, "-e option", 0, GREP_PATTERN);
 	return 0;
 }
@@ -811,6 +820,8 @@ int cmd_grep(int argc, const char **argv, const char *prefix)
 			GREP_BINARY_NOMATCH),
 		OPT_BOOL(0, "textconv", &opt.allow_textconv,
 			 N_("process binary files with textconv filters")),
+		OPT_SET_INT('r', "recursive", &opt.max_depth,
+			    N_("search in subdirectories (default)"), -1),
 		{ OPTION_INTEGER, 0, "max-depth", &opt.max_depth, N_("depth"),
 			N_("descend at most <depth> levels"), PARSE_OPT_NONEG,
 			NULL, 1 },
@@ -904,9 +915,9 @@ int cmd_grep(int argc, const char **argv, const char *prefix)
 		OPT_END()
 	};
 
-	init_grep_defaults();
+	init_grep_defaults(the_repository);
 	git_config(grep_cmd_config, NULL);
-	grep_init(&opt, prefix);
+	grep_init(&opt, the_repository, prefix);
 
 	/*
 	 * If there is no -- then the paths must exist in the working
@@ -1035,39 +1046,35 @@ int cmd_grep(int argc, const char **argv, const char *prefix)
 	pathspec.recursive = 1;
 	pathspec.recurse_submodules = !!recurse_submodules;
 
-#ifndef NO_PTHREADS
-	if (list.nr || cached || show_in_pager)
-		num_threads = 0;
-	else if (num_threads == 0)
-		num_threads = GREP_NUM_THREADS_DEFAULT;
-	else if (num_threads < 0)
-		die(_("invalid number of threads specified (%d)"), num_threads);
-	if (num_threads == 1)
-		num_threads = 0;
-#else
-	if (num_threads)
+	if (list.nr || cached || show_in_pager) {
+		if (num_threads > 1)
+			warning(_("invalid option combination, ignoring --threads"));
+		num_threads = 1;
+	} else if (!HAVE_THREADS && num_threads > 1) {
 		warning(_("no threads support, ignoring --threads"));
-	num_threads = 0;
-#endif
+		num_threads = 1;
+	} else if (num_threads < 0)
+		die(_("invalid number of threads specified (%d)"), num_threads);
+	else if (num_threads == 0)
+		num_threads = HAVE_THREADS ? GREP_NUM_THREADS_DEFAULT : 1;
 
-	if (!num_threads)
-		/*
-		 * The compiled patterns on the main path are only
-		 * used when not using threading. Otherwise
-		 * start_threads() below calls compile_grep_patterns()
-		 * for each thread.
-		 */
-		compile_grep_patterns(&opt);
-
-#ifndef NO_PTHREADS
-	if (num_threads) {
+	if (num_threads > 1) {
+		if (!HAVE_THREADS)
+			BUG("Somebody got num_threads calculation wrong!");
 		if (!(opt.name_only || opt.unmatch_name_only || opt.count)
 		    && (opt.pre_context || opt.post_context ||
 			opt.file_break || opt.funcbody))
 			skip_first_line = 1;
 		start_threads(&opt);
+	} else {
+		/*
+		 * The compiled patterns on the main path are only
+		 * used when not using threading. Otherwise
+		 * start_threads() above calls compile_grep_patterns()
+		 * for each thread.
+		 */
+		compile_grep_patterns(&opt);
 	}
-#endif
 
 	if (show_in_pager && (cached || list.nr))
 		die(_("--open-files-in-pager only works on the worktree"));
@@ -1118,7 +1125,7 @@ int cmd_grep(int argc, const char **argv, const char *prefix)
 		hit = grep_objects(&opt, &pathspec, &list);
 	}
 
-	if (num_threads)
+	if (num_threads > 1)
 		hit |= wait_all();
 	if (hit && show_in_pager)
 		run_pager(&opt, prefix);

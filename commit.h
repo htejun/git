@@ -8,6 +8,7 @@
 #include "gpg-interface.h"
 #include "string-list.h"
 #include "pretty.h"
+#include "commit-slab.h"
 
 #define COMMIT_NOT_FROM_GRAPH 0xFFFFFFFF
 #define GENERATION_NUMBER_INFINITY 0xFFFFFFFF
@@ -202,7 +203,10 @@ typedef int (*each_commit_graft_fn)(const struct commit_graft *, void *);
 
 struct commit_graft *read_graft_line(struct strbuf *line);
 int register_commit_graft(struct repository *r, struct commit_graft *, int);
+void prepare_commit_graft(struct repository *r);
 struct commit_graft *lookup_commit_graft(struct repository *r, const struct object_id *oid);
+
+struct commit *get_fork_point(const char *refname, struct commit *commit);
 
 /* largest positive number a signed 32-bit integer can contain */
 #define INFINITE_DEPTH 0x7fffffff
@@ -248,7 +252,9 @@ extern void assign_shallow_commits_to_refs(struct shallow_info *info,
 					   uint32_t **used,
 					   int *ref_status);
 extern int delayed_reachability_test(struct shallow_info *si, int c);
-extern void prune_shallow(int show_only);
+#define PRUNE_SHOW_ONLY 1
+#define PRUNE_QUICK 2
+extern void prune_shallow(unsigned options);
 extern struct trace_key trace_shallow;
 
 extern int interactive_add(int argc, const char **argv, const char *prefix, int patch);
@@ -327,6 +333,20 @@ extern int remove_signature(struct strbuf *buf);
  * sig->signer and sig->key.
  */
 extern int check_commit_signature(const struct commit *commit, struct signature_check *sigc);
+
+/* record author-date for each commit object */
+struct author_date_slab;
+void record_author_date(struct author_date_slab *author_date,
+			struct commit *commit);
+
+int compare_commits_by_author_date(const void *a_, const void *b_, void *unused);
+
+/*
+ * Verify a single commit with check_commit_signature() and die() if it is not
+ * a good signature. This isn't really suitable for general use, but is a
+ * helper to implement consistent logic for pull/merge --verify-signatures.
+ */
+void verify_merge_signature(struct commit *commit, int verbose);
 
 int compare_commits_by_commit_date(const void *a_, const void *b_, void *unused);
 int compare_commits_by_gen_then_commit_date(const void *a_, const void *b_, void *unused);

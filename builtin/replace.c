@@ -39,7 +39,8 @@ struct show_data {
 	enum replace_format format;
 };
 
-static int show_reference(const char *refname, const struct object_id *oid,
+static int show_reference(struct repository *r, const char *refname,
+			  const struct object_id *oid,
 			  int flag, void *cb_data)
 {
 	struct show_data *data = cb_data;
@@ -56,9 +57,8 @@ static int show_reference(const char *refname, const struct object_id *oid,
 			if (get_oid(refname, &object))
 				return error(_("failed to resolve '%s' as a valid ref"), refname);
 
-			obj_type = oid_object_info(the_repository, &object,
-						   NULL);
-			repl_type = oid_object_info(the_repository, oid, NULL);
+			obj_type = oid_object_info(r, &object, NULL);
+			repl_type = oid_object_info(r, oid, NULL);
 
 			printf("%s (%s) -> %s (%s)\n", refname, type_name(obj_type),
 			       oid_to_hex(oid), type_name(repl_type));
@@ -295,7 +295,7 @@ static int import_object(struct object_id *oid, enum object_type type,
 			close(fd);
 			return -1;
 		}
-		if (index_fd(oid, fd, &st, type, NULL, flags) < 0)
+		if (index_fd(&the_index, oid, fd, &st, type, NULL, flags) < 0)
 			return error(_("unable to write object to database"));
 		/* index_fd close()s fd for us */
 	}
@@ -495,6 +495,7 @@ static int convert_graft_file(int force)
 	if (!fp)
 		return -1;
 
+	advice_graft_file_deprecated = 0;
 	while (strbuf_getline(&buf, fp) != EOF) {
 		if (*buf.buf == '#')
 			continue;

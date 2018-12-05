@@ -1093,7 +1093,7 @@ int git_config_color(char *dest, const char *var, const char *value)
 	return 0;
 }
 
-static int git_default_core_config(const char *var, const char *value)
+static int git_default_core_config(const char *var, const char *value, void *cb)
 {
 	/* This needs a better name */
 	if (!strcmp(var, "core.filemode")) {
@@ -1344,14 +1344,6 @@ static int git_default_core_config(const char *var, const char *value)
 		return 0;
 	}
 
-	if (!strcmp(var, "core.hidedotfiles")) {
-		if (value && !strcasecmp(value, "dotgitonly"))
-			hide_dotfiles = HIDE_DOTFILES_DOTGITONLY;
-		else
-			hide_dotfiles = git_config_bool(var, value);
-		return 0;
-	}
-
 	if (!strcmp(var, "core.partialclonefilter")) {
 		return git_config_string(&core_partial_clone_filter_default,
 					 var, value);
@@ -1363,7 +1355,7 @@ static int git_default_core_config(const char *var, const char *value)
 	}
 
 	/* Add other config variables here and to Documentation/config.txt. */
-	return 0;
+	return platform_core_config(var, value, cb);
 }
 
 static int git_default_i18n_config(const char *var, const char *value)
@@ -1448,13 +1440,13 @@ static int git_default_mailmap_config(const char *var, const char *value)
 	return 0;
 }
 
-int git_default_config(const char *var, const char *value, void *dummy)
+int git_default_config(const char *var, const char *value, void *cb)
 {
 	if (starts_with(var, "core."))
-		return git_default_core_config(var, value);
+		return git_default_core_config(var, value, cb);
 
 	if (starts_with(var, "user."))
-		return git_ident_config(var, value, dummy);
+		return git_ident_config(var, value, cb);
 
 	if (starts_with(var, "i18n."))
 		return git_default_i18n_config(var, value);
@@ -1676,6 +1668,8 @@ static int do_git_config_sequence(const struct config_options *opts,
 
 	if (opts->commondir)
 		repo_config = mkpathdup("%s/config", opts->commondir);
+	else if (opts->git_dir)
+		BUG("git_dir without commondir");
 	else
 		repo_config = NULL;
 
@@ -1694,6 +1688,17 @@ static int do_git_config_sequence(const struct config_options *opts,
 	current_parsing_scope = CONFIG_SCOPE_REPO;
 	if (repo_config && !access_or_die(repo_config, R_OK, 0))
 		ret += git_config_from_file(fn, repo_config, data);
+
+	/*
+	 * Note: this should have a new scope, CONFIG_SCOPE_WORKTREE.
+	 * But let's not complicate things before it's actually needed.
+	 */
+	if (repository_format_worktree_config) {
+		char *path = git_pathdup("config.worktree");
+		if (!access_or_die(path, R_OK, 0))
+			ret += git_config_from_file(fn, path, data);
+		free(path);
+	}
 
 	current_parsing_scope = CONFIG_SCOPE_CMDLINE;
 	if (git_config_from_parameters(fn, data) < 0)
@@ -2278,7 +2283,7 @@ int git_config_get_max_percent_split_change(void)
 int git_config_get_fsmonitor(void)
 {
 	if (git_config_get_pathname("core.fsmonitor", &core_fsmonitor))
-		core_fsmonitor = getenv("GIT_FSMONITOR_TEST");
+		core_fsmonitor = getenv("GIT_TEST_FSMONITOR");
 
 	if (core_fsmonitor && !*core_fsmonitor)
 		core_fsmonitor = NULL;
@@ -2287,6 +2292,27 @@ int git_config_get_fsmonitor(void)
 		return 1;
 
 	return 0;
+}
+
+int git_config_get_index_threads(int *dest)
+{
+	int is_bool, val;
+
+	val = git_env_ulong("GIT_TEST_INDEX_THREADS", 0);
+	if (val) {
+		*dest = val;
+		return 0;
+	}
+
+	if (!git_config_get_bool_or_int("index.threads", &is_bool, &val)) {
+		if (is_bool)
+			*dest = val ? 0 : 1;
+		else
+			*dest = val;
+		return 0;
+	}
+
+	return 1;
 }
 
 NORETURN

@@ -732,6 +732,8 @@ static int blame_copy_callback(const struct option *option, const char *arg, int
 {
 	int *opt = option->value;
 
+	BUG_ON_OPT_NEG(unset);
+
 	/*
 	 * -C enables copy from removed files;
 	 * -C -C enables copy from existing files, but only
@@ -753,6 +755,8 @@ static int blame_copy_callback(const struct option *option, const char *arg, int
 static int blame_move_callback(const struct option *option, const char *arg, int unset)
 {
 	int *opt = option->value;
+
+	BUG_ON_OPT_NEG(unset);
 
 	*opt |= PICKAXE_BLAME_MOVE;
 
@@ -830,7 +834,7 @@ int cmd_blame(int argc, const char **argv, const char *prefix)
 
 	setup_default_color_by_age();
 	git_config(git_blame_config, &output_option);
-	init_revisions(&revs, NULL);
+	repo_init_revisions(the_repository, &revs, NULL);
 	revs.date_mode = blame_date_mode;
 	revs.diffopt.flags.allow_textconv = 1;
 	revs.diffopt.flags.follow_renames = 1;
@@ -1001,7 +1005,7 @@ parse_done:
 		long bottom, top;
 		if (parse_range_arg(range_list.items[range_i].string,
 				    nth_line_cb, &sb, lno, anchor,
-				    &bottom, &top, sb.path))
+				    &bottom, &top, sb.path, &the_index))
 			usage(blame_usage);
 		if ((!lno && (top || bottom)) || lno < bottom)
 			die(Q_("file %s has only %lu line",

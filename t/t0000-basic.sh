@@ -87,6 +87,10 @@ _run_sub_test_lib_test_common () {
 		passing metrics
 		'
 
+		# Tell the framework that we are self-testing to make sure
+		# it yields a stable result.
+		GIT_TEST_FRAMEWORK_SELFTEST=t &&
+
 		# Point to the t/test-lib.sh, which isn't in ../ as usual
 		. "\$TEST_DIRECTORY"/test-lib.sh
 		EOF
@@ -270,7 +274,7 @@ test_expect_success 'pretend we have a mix of all possible results' "
 	EOF
 "
 
-test_expect_success 'test --verbose' '
+test_expect_success C_LOCALE_OUTPUT 'test --verbose' '
 	test_must_fail run_sub_test_lib_test \
 		test-verbose "test verbose" --verbose <<-\EOF &&
 	test_expect_success "passing test" true
@@ -1097,7 +1101,7 @@ test_expect_success 'validate git diff-files output for a know cache/work tree s
 :120000 120000 $(test_oid subp3s) $ZERO_OID M	path3/subp3/file3sym
 EOF
 	git diff-files >current &&
-	test_cmp current expected
+	test_cmp expected current
 '
 
 test_expect_success 'git update-index --refresh should succeed' '

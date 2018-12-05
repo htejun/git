@@ -573,7 +573,7 @@ static int run_connect(struct transport *transport, struct strbuf *cmdbuf)
 			fprintf(stderr, "Debug: Falling back to dumb "
 				"transport.\n");
 	} else {
-		die(_(_("unknown response to connect: %s")),
+		die(_("unknown response to connect: %s"),
 		    cmdbuf->buf);
 	}
 
@@ -1105,6 +1105,7 @@ static struct ref *get_refs_list(struct transport *transport, int for_push,
 }
 
 static struct transport_vtable vtable = {
+	0,
 	set_helper_option,
 	get_refs_list,
 	fetch,

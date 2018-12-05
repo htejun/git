@@ -36,7 +36,7 @@ test_expect_success 'create commits and repack' '
 graph_git_two_modes() {
 	git -c core.commitGraph=true $1 >output
 	git -c core.commitGraph=false $1 >expect
-	test_cmp output expect
+	test_cmp expect output
 }
 
 graph_git_behavior() {
@@ -258,6 +258,66 @@ test_expect_success 'check that gc computes commit-graph' '
 	! test_cmp_bin commit-graph-before-gc commit-graph-after-gc &&
 	git commit-graph write --reachable &&
 	test_cmp_bin commit-graph-after-gc $objdir/info/commit-graph
+'
+
+test_expect_success 'replace-objects invalidates commit-graph' '
+	cd "$TRASH_DIRECTORY" &&
+	test_when_finished rm -rf replace &&
+	git clone full replace &&
+	(
+		cd replace &&
+		git commit-graph write --reachable &&
+		test_path_is_file .git/objects/info/commit-graph &&
+		git replace HEAD~1 HEAD~2 &&
+		git -c core.commitGraph=false log >expect &&
+		git -c core.commitGraph=true log >actual &&
+		test_cmp expect actual &&
+		git commit-graph write --reachable &&
+		git -c core.commitGraph=false --no-replace-objects log >expect &&
+		git -c core.commitGraph=true --no-replace-objects log >actual &&
+		test_cmp expect actual &&
+		rm -rf .git/objects/info/commit-graph &&
+		git commit-graph write --reachable &&
+		test_path_is_file .git/objects/info/commit-graph
+	)
+'
+
+test_expect_success 'commit grafts invalidate commit-graph' '
+	cd "$TRASH_DIRECTORY" &&
+	test_when_finished rm -rf graft &&
+	git clone full graft &&
+	(
+		cd graft &&
+		git commit-graph write --reachable &&
+		test_path_is_file .git/objects/info/commit-graph &&
+		H1=$(git rev-parse --verify HEAD~1) &&
+		H3=$(git rev-parse --verify HEAD~3) &&
+		echo "$H1 $H3" >.git/info/grafts &&
+		git -c core.commitGraph=false log >expect &&
+		git -c core.commitGraph=true log >actual &&
+		test_cmp expect actual &&
+		git commit-graph write --reachable &&
+		git -c core.commitGraph=false --no-replace-objects log >expect &&
+		git -c core.commitGraph=true --no-replace-objects log >actual &&
+		test_cmp expect actual &&
+		rm -rf .git/objects/info/commit-graph &&
+		git commit-graph write --reachable &&
+		test_path_is_missing .git/objects/info/commit-graph
+	)
+'
+
+test_expect_success 'replace-objects invalidates commit-graph' '
+	cd "$TRASH_DIRECTORY" &&
+	test_when_finished rm -rf shallow &&
+	git clone --depth 2 "file://$TRASH_DIRECTORY/full" shallow &&
+	(
+		cd shallow &&
+		git commit-graph write --reachable &&
+		test_path_is_missing .git/objects/info/commit-graph &&
+		git fetch origin --unshallow &&
+		git commit-graph write --reachable &&
+		test_path_is_file .git/objects/info/commit-graph
+	)
 '
 
 # the verify tests below expect the commit-graph to contain

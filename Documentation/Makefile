@@ -73,6 +73,7 @@ TECH_DOCS += technical/hash-function-transition
 TECH_DOCS += technical/http-protocol
 TECH_DOCS += technical/index-format
 TECH_DOCS += technical/long-running-process-protocol
+TECH_DOCS += technical/multi-pack-index
 TECH_DOCS += technical/pack-format
 TECH_DOCS += technical/pack-heuristics
 TECH_DOCS += technical/pack-protocol
@@ -285,7 +286,7 @@ docdep_prereqs = \
 	mergetools-list.made $(mergetools_txt) \
 	cmd-list.made $(cmds_txt)
 
-doc.dep : $(docdep_prereqs) $(wildcard *.txt) build-docdep.perl
+doc.dep : $(docdep_prereqs) $(wildcard *.txt) $(wildcard config/*.txt) build-docdep.perl
 	$(QUIET_GEN)$(RM) $@+ $@ && \
 	$(PERL_PATH) ./build-docdep.perl >$@+ $(QUIET_STDERR) && \
 	mv $@+ $@

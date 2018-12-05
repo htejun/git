@@ -176,9 +176,13 @@ cleanup_fail:
 	return NULL;
 }
 
-static void close_midx(struct multi_pack_index *m)
+void close_midx(struct multi_pack_index *m)
 {
 	uint32_t i;
+
+	if (!m)
+		return;
+
 	munmap((unsigned char *)m->data, m->data_len);
 	close(m->fd);
 	m->fd = -1;
@@ -186,7 +190,7 @@ static void close_midx(struct multi_pack_index *m)
 	for (i = 0; i < m->num_packs; i++) {
 		if (m->packs[i]) {
 			close_pack(m->packs[i]);
-			free(m->packs);
+			free(m->packs[i]);
 		}
 	}
 	FREE_AND_NULL(m->packs);
@@ -198,7 +202,7 @@ int prepare_midx_pack(struct multi_pack_index *m, uint32_t pack_int_id)
 	struct strbuf pack_name = STRBUF_INIT;
 
 	if (pack_int_id >= m->num_packs)
-		die(_("bad pack-int-id: %u (%u total packs"),
+		die(_("bad pack-int-id: %u (%u total packs)"),
 		    pack_int_id, m->num_packs);
 
 	if (m->packs[pack_int_id])
@@ -282,8 +286,8 @@ static int nth_midxed_pack_entry(struct multi_pack_index *m, struct pack_entry *
 		struct object_id oid;
 		nth_midxed_object_oid(&oid, m, pos);
 		for (i = 0; i < p->num_bad_objects; i++)
-			if (!hashcmp(oid.hash,
-				     p->bad_object_sha1 + the_hash_algo->rawsz * i))
+			if (hasheq(oid.hash,
+				   p->bad_object_sha1 + the_hash_algo->rawsz * i))
 				return 0;
 	}
 
@@ -331,9 +335,14 @@ int prepare_multi_pack_index_one(struct repository *r, const char *object_dir, i
 	struct multi_pack_index *m;
 	struct multi_pack_index *m_search;
 	int config_value;
+	static int env_value = -1;
 
-	if (repo_config_get_bool(r, "core.multipackindex", &config_value) ||
-	    !config_value)
+	if (env_value < 0)
+		env_value = git_env_bool(GIT_TEST_MULTI_PACK_INDEX, 0);
+
+	if (!env_value &&
+	    (repo_config_get_bool(r, "core.multipackindex", &config_value) ||
+	    !config_value))
 		return 0;
 
 	for (m_search = r->objects->multi_pack_index; m_search; m_search = m_search->next)
@@ -580,8 +589,8 @@ static struct pack_midx_entry *get_sorted_entries(struct multi_pack_index *m,
 		 * Take only the first duplicate.
 		 */
 		for (cur_object = 0; cur_object < nr_fanout; cur_object++) {
-			if (cur_object && !oidcmp(&entries_by_fanout[cur_object - 1].oid,
-						  &entries_by_fanout[cur_object].oid))
+			if (cur_object && oideq(&entries_by_fanout[cur_object - 1].oid,
+						&entries_by_fanout[cur_object].oid))
 				continue;
 
 			ALLOC_GROW(deduplicated_entries, *nr_objects + 1, alloc_objects);
@@ -712,12 +721,18 @@ static size_t write_midx_object_offsets(struct hashfile *f, int large_offset_nee
 static size_t write_midx_large_offsets(struct hashfile *f, uint32_t nr_large_offset,
 				       struct pack_midx_entry *objects, uint32_t nr_objects)
 {
-	struct pack_midx_entry *list = objects;
+	struct pack_midx_entry *list = objects, *end = objects + nr_objects;
 	size_t written = 0;
 
 	while (nr_large_offset) {
-		struct pack_midx_entry *obj = list++;
-		uint64_t offset = obj->offset;
+		struct pack_midx_entry *obj;
+		uint64_t offset;
+
+		if (list >= end)
+			BUG("too many large-offset objects");
+
+		obj = list++;
+		offset = obj->offset;
 
 		if (!(offset >> 31))
 			continue;
@@ -914,9 +929,14 @@ cleanup:
 	return 0;
 }
 
-void clear_midx_file(const char *object_dir)
+void clear_midx_file(struct repository *r)
 {
-	char *midx = get_midx_filename(object_dir);
+	char *midx = get_midx_filename(r->objects->objectdir);
+
+	if (r->objects && r->objects->multi_pack_index) {
+		close_midx(r->objects->multi_pack_index);
+		r->objects->multi_pack_index = NULL;
+	}
 
 	if (remove_path(midx)) {
 		UNLEAK(midx);
@@ -941,7 +961,7 @@ static void midx_report(const char *fmt, ...)
 int verify_midx_file(const char *object_dir)
 {
 	uint32_t i;
-	struct progress *progress = NULL;
+	struct progress *progress;
 	struct multi_pack_index *m = load_multi_pack_index(object_dir, 1);
 	verify_midx_error = 0;
 

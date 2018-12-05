@@ -41,7 +41,8 @@ static int diff_two(const char *file1, const char *label1,
 	xpp.flags = 0;
 	memset(&xecfg, 0, sizeof(xecfg));
 	xecfg.ctxlen = 3;
-	ecb.outf = outf;
+	ecb.out_hunk = NULL;
+	ecb.out_line = outf;
 	ret = xdi_diff(&minus, &plus, &xpp, &xecfg, &ecb);
 
 	free(minus.ptr);
@@ -70,7 +71,7 @@ int cmd_rerere(int argc, const char **argv, const char *prefix)
 		flags = RERERE_NOAUTOUPDATE;
 
 	if (argc < 1)
-		return rerere(flags);
+		return repo_rerere(the_repository, flags);
 
 	if (!strcmp(argv[0], "forget")) {
 		struct pathspec pathspec;
@@ -78,7 +79,7 @@ int cmd_rerere(int argc, const char **argv, const char *prefix)
 			warning(_("'git rerere forget' without paths is deprecated"));
 		parse_pathspec(&pathspec, 0, PATHSPEC_PREFER_CWD,
 			       prefix, argv + 1);
-		return rerere_forget(&pathspec);
+		return rerere_forget(the_repository, &pathspec);
 	}
 
 	if (!strcmp(argv[0], "clear")) {
@@ -91,7 +92,7 @@ int cmd_rerere(int argc, const char **argv, const char *prefix)
 		for (i = 0; i < merge_rr.nr; i++)
 			printf("%s\n", merge_rr.items[i].string);
 	} else if (!strcmp(argv[0], "remaining")) {
-		rerere_remaining(&merge_rr);
+		rerere_remaining(the_repository, &merge_rr);
 		for (i = 0; i < merge_rr.nr; i++) {
 			if (merge_rr.items[i].util != RERERE_RESOLVED)
 				printf("%s\n", merge_rr.items[i].string);

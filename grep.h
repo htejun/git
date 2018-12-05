@@ -36,6 +36,8 @@ typedef int pcre2_jit_stack;
 #include "thread-utils.h"
 #include "userdiff.h"
 
+struct repository;
+
 enum grep_pat_token {
 	GREP_PATTERN,
 	GREP_PATTERN_HEAD,
@@ -136,6 +138,7 @@ struct grep_opt {
 	struct grep_pat *header_list;
 	struct grep_pat **header_tail;
 	struct grep_expr *pattern_expression;
+	struct repository *repo;
 	const char *prefix;
 	int prefix_length;
 	regex_t regexp;
@@ -183,9 +186,9 @@ struct grep_opt {
 	void *output_priv;
 };
 
-extern void init_grep_defaults(void);
+extern void init_grep_defaults(struct repository *);
 extern int grep_config(const char *var, const char *value, void *);
-extern void grep_init(struct grep_opt *, const char *prefix);
+extern void grep_init(struct grep_opt *, struct repository *repo, const char *prefix);
 void grep_commit_pattern_type(enum grep_pattern_type, struct grep_opt *opt);
 
 extern void append_grep_pat(struct grep_opt *opt, const char *pat, size_t patlen, const char *origin, int no, enum grep_pat_token t);
@@ -217,7 +220,8 @@ void grep_source_init(struct grep_source *gs, enum grep_source_type type,
 		      const void *identifier);
 void grep_source_clear_data(struct grep_source *gs);
 void grep_source_clear(struct grep_source *gs);
-void grep_source_load_driver(struct grep_source *gs);
+void grep_source_load_driver(struct grep_source *gs,
+			     struct index_state *istate);
 
 
 int grep_source(struct grep_opt *opt, struct grep_source *gs);
@@ -225,7 +229,6 @@ int grep_source(struct grep_opt *opt, struct grep_source *gs);
 extern struct grep_opt *grep_opt_dup(const struct grep_opt *opt);
 extern int grep_threads_ok(const struct grep_opt *opt);
 
-#ifndef NO_PTHREADS
 /*
  * Mutex used around access to the attributes machinery if
  * opt->use_threads.  Must be initialized/destroyed by callers!
@@ -245,10 +248,5 @@ static inline void grep_read_unlock(void)
 	if (grep_use_locks)
 		pthread_mutex_unlock(&grep_read_mutex);
 }
-
-#else
-#define grep_read_lock()
-#define grep_read_unlock()
-#endif
 
 #endif

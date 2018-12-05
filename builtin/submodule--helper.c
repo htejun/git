@@ -584,6 +584,26 @@ static int module_foreach(int argc, const char **argv, const char *prefix)
 	return 0;
 }
 
+static char *compute_submodule_clone_url(const char *rel_url)
+{
+	char *remoteurl, *relurl;
+	char *remote = get_default_remote();
+	struct strbuf remotesb = STRBUF_INIT;
+
+	strbuf_addf(&remotesb, "remote.%s.url", remote);
+	if (git_config_get_string(remotesb.buf, &remoteurl)) {
+		warning(_("could not look up configuration '%s'. Assuming this repository is its own authoritative upstream."), remotesb.buf);
+		remoteurl = xgetcwd();
+	}
+	relurl = relative_url(remoteurl, rel_url, NULL);
+
+	free(remote);
+	free(remoteurl);
+	strbuf_release(&remotesb);
+
+	return relurl;
+}
+
 struct init_cb {
 	const char *prefix;
 	unsigned int flags;
@@ -634,21 +654,9 @@ static void init_submodule(const char *path, const char *prefix,
 		/* Possibly a url relative to parent */
 		if (starts_with_dot_dot_slash(url) ||
 		    starts_with_dot_slash(url)) {
-			char *remoteurl, *relurl;
-			char *remote = get_default_remote();
-			struct strbuf remotesb = STRBUF_INIT;
-			strbuf_addf(&remotesb, "remote.%s.url", remote);
-			free(remote);
-
-			if (git_config_get_string(remotesb.buf, &remoteurl)) {
-				warning(_("could not lookup configuration '%s'. Assuming this repository is its own authoritative upstream."), remotesb.buf);
-				remoteurl = xgetcwd();
-			}
-			relurl = relative_url(remoteurl, url, NULL);
-			strbuf_release(&remotesb);
-			free(remoteurl);
-			free(url);
-			url = relurl;
+			char *oldurl = url;
+			url = compute_submodule_clone_url(oldurl);
+			free(oldurl);
 		}
 
 		if (git_config_set_gently(sb.buf, url))
@@ -792,7 +800,7 @@ static void status_submodule(const char *path, const struct object_id *ce_oid,
 			 path, NULL);
 
 	git_config(git_diff_basic_config, NULL);
-	init_revisions(&rev, prefix);
+	repo_init_revisions(the_repository, &rev, prefix);
 	rev.abbrev = 0;
 	diff_files_args.argc = setup_revisions(diff_files_args.argc,
 					       diff_files_args.argv,
@@ -1457,7 +1465,6 @@ static void determine_submodule_update_strategy(struct repository *r,
 	key = xstrfmt("submodule.%s.update", sub->name);
 
 	if (update) {
-		trace_printf("parsing update");
 		if (parse_submodule_update_strategy(update, out) < 0)
 			die(_("Invalid update mode '%s' for submodule path '%s'"),
 				update, path);
@@ -1466,7 +1473,6 @@ static void determine_submodule_update_strategy(struct repository *r,
 			die(_("Invalid update mode '%s' configured for submodule path '%s'"),
 				val, path);
 	} else if (sub->update_strategy.type != SM_UPDATE_UNSPECIFIED) {
-		trace_printf("loaded thing");
 		out->type = sub->update_strategy.type;
 		out->command = sub->update_strategy.command;
 	} else
@@ -1584,6 +1590,7 @@ static int prepare_to_clone_next_submodule(const struct cache_entry *ce,
 	struct strbuf sb = STRBUF_INIT;
 	const char *displaypath = NULL;
 	int needs_cloning = 0;
+	int need_free_url = 0;
 
 	if (ce_stage(ce)) {
 		if (suc->recursive_prefix)
@@ -1632,8 +1639,14 @@ static int prepare_to_clone_next_submodule(const struct cache_entry *ce,
 
 	strbuf_reset(&sb);
 	strbuf_addf(&sb, "submodule.%s.url", sub->name);
-	if (repo_config_get_string_const(the_repository, sb.buf, &url))
-		url = sub->url;
+	if (repo_config_get_string_const(the_repository, sb.buf, &url)) {
+		if (starts_with_dot_slash(sub->url) ||
+		    starts_with_dot_dot_slash(sub->url)) {
+			url = compute_submodule_clone_url(sub->url);
+			need_free_url = 1;
+		} else
+			url = sub->url;
+	}
 
 	strbuf_reset(&sb);
 	strbuf_addf(&sb, "%s/.git", ce->name);
@@ -1679,6 +1692,8 @@ static int prepare_to_clone_next_submodule(const struct cache_entry *ce,
 cleanup:
 	strbuf_reset(&displaypath_sb);
 	strbuf_reset(&sb);
+	if (need_free_url)
+		free((void*)url);
 
 	return needs_cloning;
 }
@@ -2126,6 +2141,45 @@ static int check_name(int argc, const char **argv, const char *prefix)
 	return 0;
 }
 
+static int module_config(int argc, const char **argv, const char *prefix)
+{
+	enum {
+		CHECK_WRITEABLE = 1
+	} command = 0;
+
+	struct option module_config_options[] = {
+		OPT_CMDMODE(0, "check-writeable", &command,
+			    N_("check if it is safe to write to the .gitmodules file"),
+			    CHECK_WRITEABLE),
+		OPT_END()
+	};
+	const char *const git_submodule_helper_usage[] = {
+		N_("git submodule--helper config name [value]"),
+		N_("git submodule--helper config --check-writeable"),
+		NULL
+	};
+
+	argc = parse_options(argc, argv, prefix, module_config_options,
+			     git_submodule_helper_usage, PARSE_OPT_KEEP_ARGV0);
+
+	if (argc == 1 && command == CHECK_WRITEABLE)
+		return is_writing_gitmodules_ok() ? 0 : -1;
+
+	/* Equivalent to ACTION_GET in builtin/config.c */
+	if (argc == 2)
+		return print_config_from_gitmodules(the_repository, argv[1]);
+
+	/* Equivalent to ACTION_SET in builtin/config.c */
+	if (argc == 3) {
+		if (!is_writing_gitmodules_ok())
+			die(_("please make sure that the .gitmodules file is in the working tree"));
+
+		return config_set_in_gitmodules_file_gently(argv[1], argv[2]);
+	}
+
+	usage_with_options(git_submodule_helper_usage, module_config_options);
+}
+
 #define SUPPORT_SUPER_PREFIX (1<<0)
 
 struct cmd_struct {
@@ -2155,6 +2209,7 @@ static struct cmd_struct commands[] = {
 	{"absorb-git-dirs", absorb_git_dirs, SUPPORT_SUPER_PREFIX},
 	{"is-active", is_active, 0},
 	{"check-name", check_name, 0},
+	{"config", module_config, 0},
 };
 
 int cmd_submodule__helper(int argc, const char **argv, const char *prefix)

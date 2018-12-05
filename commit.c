@@ -17,6 +17,8 @@
 #include "sha1-lookup.h"
 #include "wt-status.h"
 #include "advice.h"
+#include "refs.h"
+#include "commit-reach.h"
 
 static struct commit_extra_header *read_commit_extra_header_lines(const char *buf, size_t len, const char **);
 
@@ -209,7 +211,7 @@ static int read_graft_file(struct repository *r, const char *graft_file)
 	return 0;
 }
 
-static void prepare_commit_graft(struct repository *r)
+void prepare_commit_graft(struct repository *r)
 {
 	char *graft_file;
 
@@ -655,11 +657,10 @@ struct commit *pop_commit(struct commit_list **stack)
 /* count number of children that have not been emitted */
 define_commit_slab(indegree_slab, int);
 
-/* record author-date for each commit object */
 define_commit_slab(author_date_slab, timestamp_t);
 
-static void record_author_date(struct author_date_slab *author_date,
-			       struct commit *commit)
+void record_author_date(struct author_date_slab *author_date,
+			struct commit *commit)
 {
 	const char *buffer = get_commit_buffer(commit, NULL);
 	struct ident_split ident;
@@ -684,8 +685,8 @@ fail_exit:
 	unuse_commit_buffer(commit, buffer);
 }
 
-static int compare_commits_by_author_date(const void *a_, const void *b_,
-					  void *cb_data)
+int compare_commits_by_author_date(const void *a_, const void *b_,
+				   void *cb_data)
 {
 	const struct commit *a = a_, *b = b_;
 	struct author_date_slab *author_date = cb_data;
@@ -841,6 +842,86 @@ void sort_in_topological_order(struct commit_list **list, enum rev_sort_order so
 	clear_prio_queue(&queue);
 	if (sort_order == REV_SORT_BY_AUTHOR_DATE)
 		clear_author_date_slab(&author_date);
+}
+
+struct rev_collect {
+	struct commit **commit;
+	int nr;
+	int alloc;
+	unsigned int initial : 1;
+};
+
+static void add_one_commit(struct object_id *oid, struct rev_collect *revs)
+{
+	struct commit *commit;
+
+	if (is_null_oid(oid))
+		return;
+
+	commit = lookup_commit(the_repository, oid);
+	if (!commit ||
+	    (commit->object.flags & TMP_MARK) ||
+	    parse_commit(commit))
+		return;
+
+	ALLOC_GROW(revs->commit, revs->nr + 1, revs->alloc);
+	revs->commit[revs->nr++] = commit;
+	commit->object.flags |= TMP_MARK;
+}
+
+static int collect_one_reflog_ent(struct object_id *ooid, struct object_id *noid,
+				  const char *ident, timestamp_t timestamp,
+				  int tz, const char *message, void *cbdata)
+{
+	struct rev_collect *revs = cbdata;
+
+	if (revs->initial) {
+		revs->initial = 0;
+		add_one_commit(ooid, revs);
+	}
+	add_one_commit(noid, revs);
+	return 0;
+}
+
+struct commit *get_fork_point(const char *refname, struct commit *commit)
+{
+	struct object_id oid;
+	struct rev_collect revs;
+	struct commit_list *bases;
+	int i;
+	struct commit *ret = NULL;
+
+	memset(&revs, 0, sizeof(revs));
+	revs.initial = 1;
+	for_each_reflog_ent(refname, collect_one_reflog_ent, &revs);
+
+	if (!revs.nr && !get_oid(refname, &oid))
+		add_one_commit(&oid, &revs);
+
+	for (i = 0; i < revs.nr; i++)
+		revs.commit[i]->object.flags &= ~TMP_MARK;
+
+	bases = get_merge_bases_many(commit, revs.nr, revs.commit);
+
+	/*
+	 * There should be one and only one merge base, when we found
+	 * a common ancestor among reflog entries.
+	 */
+	if (!bases || bases->next)
+		goto cleanup_return;
+
+	/* And the found one must be one of the reflog entries */
+	for (i = 0; i < revs.nr; i++)
+		if (&bases->item->object == &revs.commit[i]->object)
+			break; /* found */
+	if (revs.nr <= i)
+		goto cleanup_return;
+
+	ret = bases->item;
+
+cleanup_return:
+	free_commit_list(bases);
+	return ret;
 }
 
 static const char gpg_sig_header[] = "gpgsig";
@@ -1018,7 +1099,33 @@ int check_commit_signature(const struct commit *commit, struct signature_check *
 	return ret;
 }
 
+void verify_merge_signature(struct commit *commit, int verbosity)
+{
+	char hex[GIT_MAX_HEXSZ + 1];
+	struct signature_check signature_check;
+	memset(&signature_check, 0, sizeof(signature_check));
 
+	check_commit_signature(commit, &signature_check);
+
+	find_unique_abbrev_r(hex, &commit->object.oid, DEFAULT_ABBREV);
+	switch (signature_check.result) {
+	case 'G':
+		break;
+	case 'U':
+		die(_("Commit %s has an untrusted GPG signature, "
+		      "allegedly by %s."), hex, signature_check.signer);
+	case 'B':
+		die(_("Commit %s has a bad GPG signature "
+		      "allegedly by %s."), hex, signature_check.signer);
+	default: /* 'N' */
+		die(_("Commit %s does not have a GPG signature."), hex);
+	}
+	if (verbosity >= 0 && signature_check.result == 'G')
+		printf(_("Commit %s has a good GPG signature by %s\n"),
+		       hex, signature_check.signer);
+
+	signature_check_clear(&signature_check);
+}
 
 void append_merge_tag_headers(struct commit_list *parents,
 			      struct commit_extra_header ***tail)

@@ -50,6 +50,13 @@ static int filter_object(const char *path, unsigned mode,
 	return 0;
 }
 
+static int stream_blob(const struct object_id *oid)
+{
+	if (stream_blob_to_fd(1, oid, NULL, 0))
+		die("unable to stream %s to stdout", oid_to_hex(oid));
+	return 0;
+}
+
 static int cat_one_file(int opt, const char *exp_type, const char *obj_name,
 			int unknown_type)
 {
@@ -92,7 +99,7 @@ static int cat_one_file(int opt, const char *exp_type, const char *obj_name,
 		oi.sizep = &size;
 		if (oid_object_info_extended(the_repository, &oid, &oi, flags) < 0)
 			die("git cat-file: could not get object info");
-		printf("%lu\n", size);
+		printf("%"PRIuMAX"\n", (uintmax_t)size);
 		return 0;
 
 	case 'e':
@@ -113,7 +120,8 @@ static int cat_one_file(int opt, const char *exp_type, const char *obj_name,
 			die("git cat-file --textconv %s: <object> must be <sha1:path>",
 			    obj_name);
 
-		if (textconv_object(path, obj_context.mode, &oid, 1, &buf, &size))
+		if (textconv_object(the_repository, path, obj_context.mode,
+				    &oid, 1, &buf, &size))
 			break;
 		/* else fallthrough */
 
@@ -131,7 +139,7 @@ static int cat_one_file(int opt, const char *exp_type, const char *obj_name,
 		}
 
 		if (type == OBJ_BLOB)
-			return stream_blob_to_fd(1, &oid, NULL, 0);
+			return stream_blob(&oid);
 		buf = read_object_file(&oid, &type, &size);
 		if (!buf)
 			die("Cannot read object %s", obj_name);
@@ -154,7 +162,7 @@ static int cat_one_file(int opt, const char *exp_type, const char *obj_name,
 				oidcpy(&blob_oid, &oid);
 
 			if (oid_object_info(the_repository, &blob_oid, NULL) == OBJ_BLOB)
-				return stream_blob_to_fd(1, &blob_oid, NULL, 0);
+				return stream_blob(&blob_oid);
 			/*
 			 * we attempted to dereference a tag to a blob
 			 * and failed; there may be new dereference
@@ -237,7 +245,7 @@ static void expand_atom(struct strbuf *sb, const char *atom, int len,
 		if (data->mark_query)
 			data->info.sizep = &data->size;
 		else
-			strbuf_addf(sb, "%lu", data->size);
+			strbuf_addf(sb, "%"PRIuMAX , (uintmax_t)data->size);
 	} else if (is_atom("objectsize:disk", atom, len)) {
 		if (data->mark_query)
 			data->info.disk_sizep = &data->disk_size;
@@ -305,7 +313,8 @@ static void print_object_or_die(struct batch_options *opt, struct expand_data *d
 					    oid_to_hex(oid), data->rest);
 			} else if (opt->cmdmode == 'c') {
 				enum object_type type;
-				if (!textconv_object(data->rest, 0100644, oid,
+				if (!textconv_object(the_repository,
+						     data->rest, 0100644, oid,
 						     1, &contents, &size))
 					contents = read_object_file(oid,
 								    &type,
@@ -317,8 +326,9 @@ static void print_object_or_die(struct batch_options *opt, struct expand_data *d
 				BUG("invalid cmdmode: %c", opt->cmdmode);
 			batch_write(opt, contents, size);
 			free(contents);
-		} else if (stream_blob_to_fd(1, oid, NULL, 0) < 0)
-			die("unable to stream %s to stdout", oid_to_hex(oid));
+		} else {
+			stream_blob(oid);
+		}
 	}
 	else {
 		enum object_type type;
@@ -593,8 +603,10 @@ static int batch_option_callback(const struct option *opt,
 {
 	struct batch_options *bo = opt->value;
 
+	BUG_ON_OPT_NEG(unset);
+
 	if (bo->enabled) {
-		return 1;
+		return error(_("only one batch option may be specified"));
 	}
 
 	bo->enabled = 1;
@@ -629,10 +641,12 @@ int cmd_cat_file(int argc, const char **argv, const char *prefix)
 		OPT_BOOL(0, "buffer", &batch.buffer_output, N_("buffer --batch output")),
 		{ OPTION_CALLBACK, 0, "batch", &batch, "format",
 			N_("show info and content of objects fed from the standard input"),
-			PARSE_OPT_OPTARG, batch_option_callback },
+			PARSE_OPT_OPTARG | PARSE_OPT_NONEG,
+			batch_option_callback },
 		{ OPTION_CALLBACK, 0, "batch-check", &batch, "format",
 			N_("show info about objects fed from the standard input"),
-			PARSE_OPT_OPTARG, batch_option_callback },
+			PARSE_OPT_OPTARG | PARSE_OPT_NONEG,
+			batch_option_callback },
 		OPT_BOOL(0, "follow-symlinks", &batch.follow_symlinks,
 			 N_("follow in-tree symlinks (used with --batch or --batch-check)")),
 		OPT_BOOL(0, "batch-all-objects", &batch.all_objects,

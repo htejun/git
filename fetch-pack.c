@@ -76,8 +76,7 @@ struct alternate_object_cache {
 	size_t nr, alloc;
 };
 
-static void cache_one_alternate(const char *refname,
-				const struct object_id *oid,
+static void cache_one_alternate(const struct object_id *oid,
 				void *vcache)
 {
 	struct alternate_object_cache *cache = vcache;
@@ -253,8 +252,10 @@ static int find_common(struct fetch_negotiator *negotiator,
 	if (args->stateless_rpc && multi_ack == 1)
 		die(_("--stateless-rpc requires multi_ack_detailed"));
 
-	mark_tips(negotiator, args->negotiation_tips);
-	for_each_cached_alternate(negotiator, insert_one_alternate_object);
+	if (!args->no_dependents) {
+		mark_tips(negotiator, args->negotiation_tips);
+		for_each_cached_alternate(negotiator, insert_one_alternate_object);
+	}
 
 	fetching = 0;
 	for ( ; refs ; refs = refs->next) {
@@ -271,8 +272,12 @@ static int find_common(struct fetch_negotiator *negotiator,
 		 * We use lookup_object here because we are only
 		 * interested in the case we *know* the object is
 		 * reachable and we have already scanned it.
+		 *
+		 * Do this only if args->no_dependents is false (if it is true,
+		 * we cannot trust the object flags).
 		 */
-		if (((o = lookup_object(the_repository, remote->hash)) != NULL) &&
+		if (!args->no_dependents &&
+		    ((o = lookup_object(the_repository, remote->hash)) != NULL) &&
 				(o->flags & COMPLETE)) {
 			continue;
 		}
@@ -526,21 +531,14 @@ static void add_refs_to_oidset(struct oidset *oids, struct ref *refs)
 		oidset_insert(oids, &refs->old_oid);
 }
 
-static int tip_oids_contain(struct oidset *tip_oids,
-			    struct ref *unmatched, struct ref *newlist,
-			    const struct object_id *id)
+static int is_unmatched_ref(const struct ref *ref)
 {
-	/*
-	 * Note that this only looks at the ref lists the first time it's
-	 * called. This works out in filter_refs() because even though it may
-	 * add to "newlist" between calls, the additions will always be for
-	 * oids that are already in the set.
-	 */
-	if (!tip_oids->map.map.tablesize) {
-		add_refs_to_oidset(tip_oids, unmatched);
-		add_refs_to_oidset(tip_oids, newlist);
-	}
-	return oidset_contains(tip_oids, id);
+	struct object_id oid;
+	const char *p;
+	return	ref->match_status == REF_NOT_MATCHED &&
+		!parse_oid_hex(ref->name, &oid, &p) &&
+		*p == '\0' &&
+		oideq(&oid, &ref->old_oid);
 }
 
 static void filter_refs(struct fetch_pack_args *args,
@@ -553,6 +551,8 @@ static void filter_refs(struct fetch_pack_args *args,
 	struct ref *ref, *next;
 	struct oidset tip_oids = OIDSET_INIT;
 	int i;
+	int strict = !(allow_unadvertised_object_request &
+		       (ALLOW_TIP_SHA1 | ALLOW_REACHABLE_SHA1));
 
 	i = 0;
 	for (ref = *refs; ref; ref = next) {
@@ -589,23 +589,25 @@ static void filter_refs(struct fetch_pack_args *args,
 		}
 	}
 
+	if (strict) {
+		for (i = 0; i < nr_sought; i++) {
+			ref = sought[i];
+			if (!is_unmatched_ref(ref))
+				continue;
+
+			add_refs_to_oidset(&tip_oids, unmatched);
+			add_refs_to_oidset(&tip_oids, newlist);
+			break;
+		}
+	}
+
 	/* Append unmatched requests to the list */
 	for (i = 0; i < nr_sought; i++) {
-		struct object_id oid;
-		const char *p;
-
 		ref = sought[i];
-		if (ref->match_status != REF_NOT_MATCHED)
-			continue;
-		if (parse_oid_hex(ref->name, &oid, &p) ||
-		    *p != '\0' ||
-		    !oideq(&oid, &ref->old_oid))
+		if (!is_unmatched_ref(ref))
 			continue;
 
-		if ((allow_unadvertised_object_request &
-		     (ALLOW_TIP_SHA1 | ALLOW_REACHABLE_SHA1)) ||
-		    tip_oids_contain(&tip_oids, unmatched, newlist,
-				     &ref->old_oid)) {
+		if (!strict || oidset_contains(&tip_oids, &ref->old_oid)) {
 			ref->match_status = REF_MATCHED;
 			*newtail = copy_ref(ref);
 			newtail = &(*newtail)->next;
@@ -710,31 +712,29 @@ static void mark_complete_and_common_ref(struct fetch_negotiator *negotiator,
 
 	oidset_clear(&loose_oid_set);
 
-	if (!args->no_dependents) {
-		if (!args->deepen) {
-			for_each_ref(mark_complete_oid, NULL);
-			for_each_cached_alternate(NULL, mark_alternate_complete);
-			commit_list_sort_by_date(&complete);
-			if (cutoff)
-				mark_recent_complete_commits(args, cutoff);
-		}
+	if (!args->deepen) {
+		for_each_ref(mark_complete_oid, NULL);
+		for_each_cached_alternate(NULL, mark_alternate_complete);
+		commit_list_sort_by_date(&complete);
+		if (cutoff)
+			mark_recent_complete_commits(args, cutoff);
+	}
 
-		/*
-		 * Mark all complete remote refs as common refs.
-		 * Don't mark them common yet; the server has to be told so first.
-		 */
-		for (ref = *refs; ref; ref = ref->next) {
-			struct object *o = deref_tag(the_repository,
-						     lookup_object(the_repository,
-						     ref->old_oid.hash),
-						     NULL, 0);
+	/*
+	 * Mark all complete remote refs as common refs.
+	 * Don't mark them common yet; the server has to be told so first.
+	 */
+	for (ref = *refs; ref; ref = ref->next) {
+		struct object *o = deref_tag(the_repository,
+					     lookup_object(the_repository,
+					     ref->old_oid.hash),
+					     NULL, 0);
 
-			if (!o || o->type != OBJ_COMMIT || !(o->flags & COMPLETE))
-				continue;
+		if (!o || o->type != OBJ_COMMIT || !(o->flags & COMPLETE))
+			continue;
 
-			negotiator->known_common(negotiator,
-						 (struct commit *)o);
-		}
+		negotiator->known_common(negotiator,
+					 (struct commit *)o);
 	}
 
 	save_commit_buffer = old_save_commit_buffer;
@@ -990,11 +990,15 @@ static struct ref *do_fetch_pack(struct fetch_pack_args *args,
 	if (!server_supports("deepen-relative") && args->deepen_relative)
 		die(_("Server does not support --deepen"));
 
-	mark_complete_and_common_ref(&negotiator, args, &ref);
-	filter_refs(args, &ref, sought, nr_sought);
-	if (everything_local(args, &ref)) {
-		packet_flush(fd[1]);
-		goto all_done;
+	if (!args->no_dependents) {
+		mark_complete_and_common_ref(&negotiator, args, &ref);
+		filter_refs(args, &ref, sought, nr_sought);
+		if (everything_local(args, &ref)) {
+			packet_flush(fd[1]);
+			goto all_done;
+		}
+	} else {
+		filter_refs(args, &ref, sought, nr_sought);
 	}
 	if (find_common(&negotiator, args, fd, &oid, ref) < 0)
 		if (!args->keep_pack)
@@ -1040,7 +1044,7 @@ static void add_shallow_requests(struct strbuf *req_buf,
 	}
 }
 
-static void add_wants(const struct ref *wants, struct strbuf *req_buf)
+static void add_wants(int no_dependents, const struct ref *wants, struct strbuf *req_buf)
 {
 	int use_ref_in_want = server_supports_feature("fetch", "ref-in-want", 0);
 
@@ -1057,8 +1061,12 @@ static void add_wants(const struct ref *wants, struct strbuf *req_buf)
 		 * We use lookup_object here because we are only
 		 * interested in the case we *know* the object is
 		 * reachable and we have already scanned it.
+		 *
+		 * Do this only if args->no_dependents is false (if it is true,
+		 * we cannot trust the object flags).
 		 */
-		if (((o = lookup_object(the_repository, remote->hash)) != NULL) &&
+		if (!no_dependents &&
+		    ((o = lookup_object(the_repository, remote->hash)) != NULL) &&
 		    (o->flags & COMPLETE)) {
 			continue;
 		}
@@ -1155,7 +1163,7 @@ static int send_fetch_request(struct fetch_negotiator *negotiator, int fd_out,
 	}
 
 	/* add wants */
-	add_wants(wants, &req_buf);
+	add_wants(args->no_dependents, wants, &req_buf);
 
 	if (args->no_dependents) {
 		packet_buf_write(&req_buf, "done");
@@ -1239,6 +1247,18 @@ static int process_acks(struct fetch_negotiator *negotiator,
 	if (reader->status != PACKET_READ_FLUSH &&
 	    reader->status != PACKET_READ_DELIM)
 		die(_("error processing acks: %d"), reader->status);
+
+	/*
+	 * If an "acknowledgments" section is sent, a packfile is sent if and
+	 * only if "ready" was sent in this section. The other sections
+	 * ("shallow-info" and "wanted-refs") are sent only if a packfile is
+	 * sent. Therefore, a DELIM is expected if "ready" is sent, and a FLUSH
+	 * otherwise.
+	 */
+	if (received_ready && reader->status != PACKET_READ_DELIM)
+		die(_("expected packfile to be sent after 'ready'"));
+	if (!received_ready && reader->status != PACKET_READ_FLUSH)
+		die(_("expected no other sections to be sent after no 'ready'"));
 
 	/* return 0 if no common, 1 if there are common, or 2 if ready */
 	return received_ready ? 2 : (received_ack ? 1 : 0);
@@ -1346,16 +1366,21 @@ static struct ref *do_fetch_pack_v2(struct fetch_pack_args *args,
 				args->deepen = 1;
 
 			/* Filter 'ref' by 'sought' and those that aren't local */
-			mark_complete_and_common_ref(&negotiator, args, &ref);
-			filter_refs(args, &ref, sought, nr_sought);
-			if (everything_local(args, &ref))
-				state = FETCH_DONE;
-			else
-				state = FETCH_SEND_REQUEST;
+			if (!args->no_dependents) {
+				mark_complete_and_common_ref(&negotiator, args, &ref);
+				filter_refs(args, &ref, sought, nr_sought);
+				if (everything_local(args, &ref))
+					state = FETCH_DONE;
+				else
+					state = FETCH_SEND_REQUEST;
 
-			mark_tips(&negotiator, args->negotiation_tips);
-			for_each_cached_alternate(&negotiator,
-						  insert_one_alternate_object);
+				mark_tips(&negotiator, args->negotiation_tips);
+				for_each_cached_alternate(&negotiator,
+							  insert_one_alternate_object);
+			} else {
+				filter_refs(args, &ref, sought, nr_sought);
+				state = FETCH_SEND_REQUEST;
+			}
 			break;
 		case FETCH_SEND_REQUEST:
 			if (send_fetch_request(&negotiator, fd[1], args, ref,
@@ -1598,7 +1623,21 @@ struct ref *fetch_pack(struct fetch_pack_args *args,
 	if (nr_sought)
 		nr_sought = remove_duplicates_in_refs(sought, nr_sought);
 
-	if (!ref) {
+	if (args->no_dependents && !args->filter_options.choice) {
+		/*
+		 * The protocol does not support requesting that only the
+		 * wanted objects be sent, so approximate this by setting a
+		 * "blob:none" filter if no filter is already set. This works
+		 * for all object types: note that wanted blobs will still be
+		 * sent because they are directly specified as a "want".
+		 *
+		 * NEEDSWORK: Add an option in the protocol to request that
+		 * only the wanted objects be sent, and implement it.
+		 */
+		parse_list_objects_filter(&args->filter_options, "blob:none");
+	}
+
+	if (version != protocol_v2 && !ref) {
 		packet_flush(fd[1]);
 		die(_("no matching remote head"));
 	}

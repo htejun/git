@@ -13,6 +13,9 @@
 #include "commit-graph.h"
 #include "object-store.h"
 #include "alloc.h"
+#include "hashmap.h"
+#include "replace-object.h"
+#include "progress.h"
 
 #define GRAPH_SIGNATURE 0x43475048 /* "CGPH" */
 #define GRAPH_CHUNKID_OIDFANOUT 0x4f494446 /* "OIDF" */
@@ -54,6 +57,28 @@ static struct commit_graph *alloc_commit_graph(void)
 	g->graph_fd = -1;
 
 	return g;
+}
+
+extern int read_replace_refs;
+
+static int commit_graph_compatible(struct repository *r)
+{
+	if (!r->gitdir)
+		return 0;
+
+	if (read_replace_refs) {
+		prepare_replace_object(r);
+		if (hashmap_get_size(&r->objects->replace_map->map))
+			return 0;
+	}
+
+	prepare_commit_graft(r);
+	if (r->parsed_objects && r->parsed_objects->grafts_nr)
+		return 0;
+	if (is_repository_shallow(r))
+		return 0;
+
+	return 1;
 }
 
 struct commit_graph *load_commit_graph_one(const char *graph_file)
@@ -224,6 +249,9 @@ static int prepare_commit_graph(struct repository *r)
 		 */
 		return 0;
 
+	if (!commit_graph_compatible(r))
+		return 0;
+
 	obj_dir = r->objects->objectdir;
 	prepare_commit_graph_one(r, obj_dir);
 	prepare_alt_odb(r);
@@ -252,10 +280,10 @@ int generation_numbers_enabled(struct repository *r)
 	return !!first_generation;
 }
 
-static void close_commit_graph(void)
+void close_commit_graph(struct repository *r)
 {
-	free_commit_graph(the_repository->objects->commit_graph);
-	the_repository->objects->commit_graph = NULL;
+	free_commit_graph(r->objects->commit_graph);
+	r->objects->commit_graph = NULL;
 }
 
 static int bsearch_graph(struct commit_graph *g, struct object_id *oid, uint32_t *pos)
@@ -567,6 +595,8 @@ struct packed_oid_list {
 	struct object_id *list;
 	int nr;
 	int alloc;
+	struct progress *progress;
+	int progress_done;
 };
 
 static int add_packed_commits(const struct object_id *oid,
@@ -578,6 +608,9 @@ static int add_packed_commits(const struct object_id *oid,
 	enum object_type type;
 	off_t offset = nth_packed_object_offset(pack, pos);
 	struct object_info oi = OBJECT_INFO_INIT;
+
+	if (list->progress)
+		display_progress(list->progress, ++list->progress_done);
 
 	oi.typep = &type;
 	if (packed_object_info(the_repository, pack, offset, &oi) < 0)
@@ -606,12 +639,18 @@ static void add_missing_parents(struct packed_oid_list *oids, struct commit *com
 	}
 }
 
-static void close_reachable(struct packed_oid_list *oids)
+static void close_reachable(struct packed_oid_list *oids, int report_progress)
 {
 	int i;
 	struct commit *commit;
+	struct progress *progress = NULL;
+	int j = 0;
 
+	if (report_progress)
+		progress = start_delayed_progress(
+			_("Annotating commits in commit graph"), 0);
 	for (i = 0; i < oids->nr; i++) {
+		display_progress(progress, ++j);
 		commit = lookup_commit(the_repository, &oids->list[i]);
 		if (commit)
 			commit->object.flags |= UNINTERESTING;
@@ -623,6 +662,7 @@ static void close_reachable(struct packed_oid_list *oids)
 	 * closure.
 	 */
 	for (i = 0; i < oids->nr; i++) {
+		display_progress(progress, ++j);
 		commit = lookup_commit(the_repository, &oids->list[i]);
 
 		if (commit && !parse_commit(commit))
@@ -630,19 +670,28 @@ static void close_reachable(struct packed_oid_list *oids)
 	}
 
 	for (i = 0; i < oids->nr; i++) {
+		display_progress(progress, ++j);
 		commit = lookup_commit(the_repository, &oids->list[i]);
 
 		if (commit)
 			commit->object.flags &= ~UNINTERESTING;
 	}
+	stop_progress(&progress);
 }
 
-static void compute_generation_numbers(struct packed_commit_list* commits)
+static void compute_generation_numbers(struct packed_commit_list* commits,
+				       int report_progress)
 {
 	int i;
 	struct commit_list *list = NULL;
+	struct progress *progress = NULL;
 
+	if (report_progress)
+		progress = start_progress(
+			_("Computing commit graph generation numbers"),
+			commits->nr);
 	for (i = 0; i < commits->nr; i++) {
+		display_progress(progress, i + 1);
 		if (commits->list[i]->generation != GENERATION_NUMBER_INFINITY &&
 		    commits->list[i]->generation != GENERATION_NUMBER_ZERO)
 			continue;
@@ -674,6 +723,7 @@ static void compute_generation_numbers(struct packed_commit_list* commits)
 			}
 		}
 	}
+	stop_progress(&progress);
 }
 
 static int add_ref_to_list(const char *refname,
@@ -686,19 +736,21 @@ static int add_ref_to_list(const char *refname,
 	return 0;
 }
 
-void write_commit_graph_reachable(const char *obj_dir, int append)
+void write_commit_graph_reachable(const char *obj_dir, int append,
+				  int report_progress)
 {
-	struct string_list list;
+	struct string_list list = STRING_LIST_INIT_DUP;
 
-	string_list_init(&list, 1);
 	for_each_ref(add_ref_to_list, &list);
-	write_commit_graph(obj_dir, NULL, &list, append);
+	write_commit_graph(obj_dir, NULL, &list, append, report_progress);
+
+	string_list_clear(&list, 0);
 }
 
 void write_commit_graph(const char *obj_dir,
 			struct string_list *pack_indexes,
 			struct string_list *commit_hex,
-			int append)
+			int append, int report_progress)
 {
 	struct packed_oid_list oids;
 	struct packed_commit_list commits;
@@ -711,9 +763,15 @@ void write_commit_graph(const char *obj_dir,
 	int num_chunks;
 	int num_extra_edges;
 	struct commit_list *parent;
+	struct progress *progress = NULL;
+
+	if (!commit_graph_compatible(the_repository))
+		return;
 
 	oids.nr = 0;
-	oids.alloc = approximate_object_count() / 4;
+	oids.alloc = approximate_object_count() / 32;
+	oids.progress = NULL;
+	oids.progress_done = 0;
 
 	if (append) {
 		prepare_commit_graph_one(the_repository, obj_dir);
@@ -740,6 +798,11 @@ void write_commit_graph(const char *obj_dir,
 		int dirlen;
 		strbuf_addf(&packname, "%s/pack/", obj_dir);
 		dirlen = packname.len;
+		if (report_progress) {
+			oids.progress = start_delayed_progress(
+				_("Finding commits for commit graph"), 0);
+			oids.progress_done = 0;
+		}
 		for (i = 0; i < pack_indexes->nr; i++) {
 			struct packed_git *p;
 			strbuf_setlen(&packname, dirlen);
@@ -751,16 +814,23 @@ void write_commit_graph(const char *obj_dir,
 				die(_("error opening index for %s"), packname.buf);
 			for_each_object_in_pack(p, add_packed_commits, &oids, 0);
 			close_pack(p);
+			free(p);
 		}
+		stop_progress(&oids.progress);
 		strbuf_release(&packname);
 	}
 
 	if (commit_hex) {
+		if (report_progress)
+			progress = start_delayed_progress(
+				_("Finding commits for commit graph"),
+				commit_hex->nr);
 		for (i = 0; i < commit_hex->nr; i++) {
 			const char *end;
 			struct object_id oid;
 			struct commit *result;
 
+			display_progress(progress, i + 1);
 			if (commit_hex->items[i].string &&
 			    parse_oid_hex(commit_hex->items[i].string, &oid, &end))
 				continue;
@@ -773,12 +843,18 @@ void write_commit_graph(const char *obj_dir,
 				oids.nr++;
 			}
 		}
+		stop_progress(&progress);
 	}
 
-	if (!pack_indexes && !commit_hex)
+	if (!pack_indexes && !commit_hex) {
+		if (report_progress)
+			oids.progress = start_delayed_progress(
+				_("Finding commits for commit graph"), 0);
 		for_each_packed_object(add_packed_commits, &oids, 0);
+		stop_progress(&oids.progress);
+	}
 
-	close_reachable(&oids);
+	close_reachable(&oids, report_progress);
 
 	QSORT(oids.list, oids.nr, commit_compare);
 
@@ -818,12 +894,14 @@ void write_commit_graph(const char *obj_dir,
 	if (commits.nr >= GRAPH_PARENT_MISSING)
 		die(_("too many commits to write graph"));
 
-	compute_generation_numbers(&commits);
+	compute_generation_numbers(&commits, report_progress);
 
 	graph_name = get_commit_graph_filename(obj_dir);
-	if (safe_create_leading_directories(graph_name))
+	if (safe_create_leading_directories(graph_name)) {
+		UNLEAK(graph_name);
 		die_errno(_("unable to create leading directories of %s"),
 			  graph_name);
+	}
 
 	hold_lock_file_for_update(&lk, graph_name, LOCK_DIE_ON_ERROR);
 	f = hashfd(lk.tempfile->fd, lk.tempfile->filename.buf);
@@ -864,13 +942,13 @@ void write_commit_graph(const char *obj_dir,
 	write_graph_chunk_data(f, GRAPH_OID_LEN, commits.list, commits.nr);
 	write_graph_chunk_large_edges(f, commits.list, commits.nr);
 
-	close_commit_graph();
+	close_commit_graph(the_repository);
 	finalize_hashfile(f, NULL, CSUM_HASH_IN_STREAM | CSUM_FSYNC);
 	commit_lock_file(&lk);
 
+	free(graph_name);
+	free(commits.list);
 	free(oids.list);
-	oids.alloc = 0;
-	oids.nr = 0;
 }
 
 #define VERIFY_COMMIT_GRAPH_ERROR_HASH 2
@@ -897,6 +975,7 @@ int verify_commit_graph(struct repository *r, struct commit_graph *g)
 	int generation_zero = 0;
 	struct hashfile *f;
 	int devnull;
+	struct progress *progress = NULL;
 
 	if (!g) {
 		graph_report("no commit-graph file loaded");
@@ -964,11 +1043,14 @@ int verify_commit_graph(struct repository *r, struct commit_graph *g)
 	if (verify_commit_graph_error & ~VERIFY_COMMIT_GRAPH_ERROR_HASH)
 		return verify_commit_graph_error;
 
+	progress = start_progress(_("Verifying commits in commit graph"),
+				  g->num_commits);
 	for (i = 0; i < g->num_commits; i++) {
 		struct commit *graph_commit, *odb_commit;
 		struct commit_list *graph_parents, *odb_parents;
 		uint32_t max_generation = 0;
 
+		display_progress(progress, i + 1);
 		hashcpy(cur_oid.hash, g->chunk_oid_lookup + g->hash_len * i);
 
 		graph_commit = lookup_commit(r, &cur_oid);
@@ -1045,6 +1127,7 @@ int verify_commit_graph(struct repository *r, struct commit_graph *g)
 				     graph_commit->date,
 				     odb_commit->date);
 	}
+	stop_progress(&progress);
 
 	return verify_commit_graph_error;
 }

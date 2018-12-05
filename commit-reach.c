@@ -426,7 +426,7 @@ struct contains_stack {
 static int in_commit_list(const struct commit_list *want, struct commit *c)
 {
 	for (; want; want = want->next)
-		if (!oidcmp(&want->item->object.oid, &c->object.oid))
+		if (oideq(&want->item->object.oid, &c->object.oid))
 			return 1;
 	return 0;
 }
@@ -529,8 +529,8 @@ int commit_contains(struct ref_filter *filter, struct commit *commit,
 
 static int compare_commits_by_gen(const void *_a, const void *_b)
 {
-	const struct commit *a = (const struct commit *)_a;
-	const struct commit *b = (const struct commit *)_b;
+	const struct commit *a = *(const struct commit * const *)_a;
+	const struct commit *b = *(const struct commit * const *)_b;
 
 	if (a->generation < b->generation)
 		return -1;
@@ -561,7 +561,8 @@ int can_all_from_reach_with_flag(struct object_array *from,
 		from_one = deref_tag(the_repository, from_one,
 				     "a from object", 0);
 		if (!from_one || from_one->type != OBJ_COMMIT) {
-			/* no way to tell if this is reachable by
+			/*
+			 * no way to tell if this is reachable by
 			 * looking at the ancestry chain alone, so
 			 * leave a note to ourselves not to worry about
 			 * this object anymore.
@@ -592,8 +593,10 @@ int can_all_from_reach_with_flag(struct object_array *from,
 		while (stack) {
 			struct commit_list *parent;
 
-			if (stack->item->object.flags & with_flag) {
+			if (stack->item->object.flags & (with_flag | RESULT)) {
 				pop_commit(&stack);
+				if (stack)
+					stack->item->object.flags |= RESULT;
 				continue;
 			}
 
@@ -625,10 +628,7 @@ int can_all_from_reach_with_flag(struct object_array *from,
 	}
 
 cleanup:
-	for (i = 0; i < nr_commits; i++) {
-		clear_commit_marks(list[i], RESULT);
-		clear_commit_marks(list[i], assign_flag);
-	}
+	clear_commit_marks_many(nr_commits, list, RESULT | assign_flag);
 	free(list);
 
 	for (i = 0; i < from->nr; i++)
@@ -689,4 +689,73 @@ int can_all_from_reach(struct commit_list *from, struct commit_list *to,
 
 	object_array_clear(&from_objs);
 	return result;
+}
+
+struct commit_list *get_reachable_subset(struct commit **from, int nr_from,
+					 struct commit **to, int nr_to,
+					 unsigned int reachable_flag)
+{
+	struct commit **item;
+	struct commit *current;
+	struct commit_list *found_commits = NULL;
+	struct commit **to_last = to + nr_to;
+	struct commit **from_last = from + nr_from;
+	uint32_t min_generation = GENERATION_NUMBER_INFINITY;
+	int num_to_find = 0;
+
+	struct prio_queue queue = { compare_commits_by_gen_then_commit_date };
+
+	for (item = to; item < to_last; item++) {
+		struct commit *c = *item;
+
+		parse_commit(c);
+		if (c->generation < min_generation)
+			min_generation = c->generation;
+
+		if (!(c->object.flags & PARENT1)) {
+			c->object.flags |= PARENT1;
+			num_to_find++;
+		}
+	}
+
+	for (item = from; item < from_last; item++) {
+		struct commit *c = *item;
+		if (!(c->object.flags & PARENT2)) {
+			c->object.flags |= PARENT2;
+			parse_commit(c);
+
+			prio_queue_put(&queue, *item);
+		}
+	}
+
+	while (num_to_find && (current = prio_queue_get(&queue)) != NULL) {
+		struct commit_list *parents;
+
+		if (current->object.flags & PARENT1) {
+			current->object.flags &= ~PARENT1;
+			current->object.flags |= reachable_flag;
+			commit_list_insert(current, &found_commits);
+			num_to_find--;
+		}
+
+		for (parents = current->parents; parents; parents = parents->next) {
+			struct commit *p = parents->item;
+
+			parse_commit(p);
+
+			if (p->generation < min_generation)
+				continue;
+
+			if (p->object.flags & PARENT2)
+				continue;
+
+			p->object.flags |= PARENT2;
+			prio_queue_put(&queue, p);
+		}
+	}
+
+	clear_commit_marks_many(nr_to, to, PARENT1);
+	clear_commit_marks_many(nr_from, from, PARENT2);
+
+	return found_commits;
 }

@@ -161,6 +161,9 @@ static int opt_parse_m(const struct option *opt, const char *arg, int unset)
 static int opt_parse_rename_score(const struct option *opt, const char *arg, int unset)
 {
 	const char **value = opt->value;
+
+	BUG_ON_OPT_NEG(unset);
+
 	if (arg != NULL && *arg == '=')
 		arg = arg + 1;
 
@@ -508,8 +511,9 @@ static int run_status(FILE *fp, const char *index_file, const char *prefix, int 
 
 	wt_status_collect(s);
 	wt_status_print(s);
+	wt_status_collect_free_buffers(s);
 
-	return s->commitable;
+	return s->committable;
 }
 
 static int is_a_merge(const struct commit *current_head)
@@ -655,7 +659,7 @@ static int prepare_to_commit(const char *index_file, const char *prefix,
 {
 	struct stat statbuf;
 	struct strbuf committer_ident = STRBUF_INIT;
-	int commitable;
+	int committable;
 	struct strbuf sb = STRBUF_INIT;
 	const char *hook_arg1 = NULL;
 	const char *hook_arg2 = NULL;
@@ -872,8 +876,9 @@ static int prepare_to_commit(const char *index_file, const char *prefix,
 
 		saved_color_setting = s->use_color;
 		s->use_color = 0;
-		commitable = run_status(s->fp, index_file, prefix, 1, s);
+		committable = run_status(s->fp, index_file, prefix, 1, s);
 		s->use_color = saved_color_setting;
+		string_list_clear(&s->change, 1);
 	} else {
 		struct object_id oid;
 		const char *parent = "HEAD";
@@ -890,7 +895,7 @@ static int prepare_to_commit(const char *index_file, const char *prefix,
 			for (i = 0; i < active_nr; i++)
 				if (ce_intent_to_add(active_cache[i]))
 					ita_nr++;
-			commitable = active_nr - ita_nr > 0;
+			committable = active_nr - ita_nr > 0;
 		} else {
 			/*
 			 * Unless the user did explicitly request a submodule
@@ -906,7 +911,7 @@ static int prepare_to_commit(const char *index_file, const char *prefix,
 			if (ignore_submodule_arg &&
 			    !strcmp(ignore_submodule_arg, "all"))
 				flags.ignore_submodules = 1;
-			commitable = index_differs_from(parent, &flags, 1);
+			committable = index_differs_from(parent, &flags, 1);
 		}
 	}
 	strbuf_release(&committer_ident);
@@ -918,7 +923,7 @@ static int prepare_to_commit(const char *index_file, const char *prefix,
 	 * explicit --allow-empty. In the cherry-pick case, it may be
 	 * empty due to conflict resolution, which the user should okay.
 	 */
-	if (!commitable && whence != FROM_MERGE && !allow_empty &&
+	if (!committable && whence != FROM_MERGE && !allow_empty &&
 	    !(amend && is_a_merge(current_head))) {
 		s->display_comment_prefix = old_display_comment_prefix;
 		run_status(stdout, index_file, prefix, 0, s);
@@ -982,7 +987,7 @@ static const char *find_author_by_nickname(const char *name)
 	const char *av[20];
 	int ac = 0;
 
-	init_revisions(&revs, NULL);
+	repo_init_revisions(the_repository, &revs, NULL);
 	strbuf_addf(&buf, "--author=%s", name);
 	av[++ac] = "--all";
 	av[++ac] = "-i";
@@ -1188,14 +1193,14 @@ static int parse_and_validate_options(int argc, const char *argv[],
 static int dry_run_commit(int argc, const char **argv, const char *prefix,
 			  const struct commit *current_head, struct wt_status *s)
 {
-	int commitable;
+	int committable;
 	const char *index_file;
 
 	index_file = prepare_index(argc, argv, prefix, current_head, 1);
-	commitable = run_status(stdout, index_file, prefix, 0, s);
+	committable = run_status(stdout, index_file, prefix, 0, s);
 	rollback_index_files();
 
-	return commitable ? 0 : 1;
+	return committable ? 0 : 1;
 }
 
 define_list_config_array_extra(color_status_slots, {"added"});
@@ -1297,6 +1302,7 @@ int cmd_status(int argc, const char **argv, const char *prefix)
 	static int no_renames = -1;
 	static const char *rename_score_arg = (const char *)-1;
 	static struct wt_status s;
+	unsigned int progress_flag = 0;
 	int fd;
 	struct object_id oid;
 	static struct option builtin_status_options[] = {
@@ -1332,7 +1338,7 @@ int cmd_status(int argc, const char **argv, const char *prefix)
 		OPT_BOOL(0, "no-renames", &no_renames, N_("do not detect renames")),
 		{ OPTION_CALLBACK, 'M', "find-renames", &rename_score_arg,
 		  N_("n"), N_("detect renames, optionally set similarity index"),
-		  PARSE_OPT_OPTARG, opt_parse_rename_score },
+		  PARSE_OPT_OPTARG | PARSE_OPT_NONEG, opt_parse_rename_score },
 		OPT_END(),
 	};
 
@@ -1357,8 +1363,13 @@ int cmd_status(int argc, const char **argv, const char *prefix)
 		       PATHSPEC_PREFER_FULL,
 		       prefix, argv);
 
-	read_cache_preload(&s.pathspec);
-	refresh_index(&the_index, REFRESH_QUIET|REFRESH_UNMERGED, &s.pathspec, NULL, NULL);
+	if (status_format != STATUS_FORMAT_PORCELAIN &&
+	    status_format != STATUS_FORMAT_PORCELAIN_V2)
+		progress_flag = REFRESH_PROGRESS;
+	read_index(&the_index);
+	refresh_index(&the_index,
+		      REFRESH_QUIET|REFRESH_UNMERGED|progress_flag,
+		      &s.pathspec, NULL, NULL);
 
 	if (use_optional_locks())
 		fd = hold_locked_index(&index_lock, 0);
@@ -1390,6 +1401,8 @@ int cmd_status(int argc, const char **argv, const char *prefix)
 		s.prefix = prefix;
 
 	wt_status_print(&s);
+	wt_status_collect_free_buffers(&s);
+
 	return 0;
 }
 
@@ -1654,9 +1667,9 @@ int cmd_commit(int argc, const char **argv, const char *prefix)
 		      "not exceeded, and then \"git reset HEAD\" to recover."));
 
 	if (git_env_bool(GIT_TEST_COMMIT_GRAPH, 0))
-		write_commit_graph_reachable(get_object_directory(), 0);
+		write_commit_graph_reachable(get_object_directory(), 0, 0);
 
-	rerere(0);
+	repo_rerere(the_repository, 0);
 	run_command_v_opt(argv_gc_auto, RUN_GIT_CMD);
 	run_commit_hook(use_editor, get_index_file(), "post-commit", NULL);
 	if (amend && !no_post_rewrite) {
