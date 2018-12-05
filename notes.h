@@ -321,8 +321,7 @@ void expand_notes_ref(struct strbuf *sb);
  */
 void expand_loose_notes_ref(struct strbuf *sb);
 
-void read_xref_note(const char *notes_ref, const char *prefix,
-		    const struct object_id *commit_oid,
+void read_xref_note(const char *notes_ref, const struct object_id *commit_oid,
 		    struct object_array *result);
 
 #endif

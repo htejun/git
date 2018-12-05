@@ -1196,8 +1196,7 @@ static void walk_cherry_picks(struct object_id *from_oid, struct strbuf *sb,
 	struct object_array cps = OBJECT_ARRAY_INIT;
 	int i;
 
-	read_xref_note(NOTES_CHERRY_PICKS_REF, NOTES_CHERRY_PICKED_TO,
-		       from_oid, &cps);
+	read_xref_note(NOTES_CHERRY_PICKS_REF, from_oid, &cps);
 
 	for (i = 0; i < cps.nr; i++) {
 		strbuf_addf(sb, "    %s%*s%s\n",
@@ -1364,11 +1363,10 @@ static int notes_tree_cmp(const void *hashmap_cmp_fn_data,
 /*
  * Read a cross-referencing note.
  *
- * Notes in @notes_ref contains lines of "@prefix $OID" pointing to other
+ * Notes in @notes_ref contains lines of "[PREFIX] OID" pointing to other
  * commits.  Read the target commits and add the objects to @result.
  */
-void read_xref_note(const char *notes_ref, const char *prefix,
-		    const struct object_id *commit_oid,
+void read_xref_note(const char *notes_ref, const struct object_id *commit_oid,
 		    struct object_array *result)
 {
 	static struct hashmap *notes_tree_map = NULL;
@@ -1415,13 +1413,11 @@ void read_xref_note(const char *notes_ref, const char *prefix,
 
 		strbuf_trim(line);
 
-		if (!starts_with(line->buf, prefix)) {
-			warning("read invalid %s note on %s: %s",
-				notes_ref, oid_to_hex(commit_oid), line->buf);
-			continue;
-		}
-
-		target_hex = line->buf + strlen(prefix);
+		target_hex = strrchr(line->buf, ' ');
+		if (target_hex)
+			target_hex++;
+		else
+			target_hex = line->buf;
 
 		if (get_oid_hex(target_hex, &target_oid)) {
 			warning("read invalid sha1 on %s: %s",
