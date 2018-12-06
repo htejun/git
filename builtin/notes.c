@@ -26,7 +26,7 @@
 
 static const char * const git_notes_usage[] = {
 	N_("git notes [--ref <notes-ref>] [list [<object>]]"),
-	N_("git notes [--ref <notes-ref>] add [-f] [-q] [--allow-empty] [-m <msg> | -F <file> | (-c | -C) <object>] [<object>]"),
+	N_("git notes [--ref <notes-ref>] add [-f] [--allow-empty] [-m <msg> | -F <file> | (-c | -C) <object>] [<object>]"),
 	N_("git notes [--ref <notes-ref>] copy [-f] <from-object> <to-object>"),
 	N_("git notes [--ref <notes-ref>] append [--allow-empty] [-m <msg> | -F <file> | (-c | -C) <object>] [<object>]"),
 	N_("git notes [--ref <notes-ref>] edit [--allow-empty] [<object>]"),
@@ -399,7 +399,7 @@ static int append_edit(int argc, const char **argv, const char *prefix);
 
 static int add(int argc, const char **argv, const char *prefix)
 {
-	int force = 0, quiet = 0, allow_empty = 0;
+	int force = 0, allow_empty = 0;
 	const char *object_ref;
 	struct notes_tree *t;
 	struct object_id object, new_note;
@@ -421,7 +421,6 @@ static int add(int argc, const char **argv, const char *prefix)
 		OPT_BOOL(0, "allow-empty", &allow_empty,
 			N_("allow storing empty note")),
 		OPT__FORCE(&force, N_("replace existing notes"), PARSE_OPT_NOCOMPLETE),
-		OPT__QUIET(&quiet, N_("suppress informational messages")),
 		OPT_END()
 	};
 
@@ -461,9 +460,8 @@ static int add(int argc, const char **argv, const char *prefix)
 			argv[0] = "edit";
 			return append_edit(argc, argv, prefix);
 		}
-		if (!quiet)
-			fprintf(stderr, _("Overwriting existing notes for object %s\n"),
-				oid_to_hex(&object));
+		fprintf(stderr, _("Overwriting existing notes for object %s\n"),
+			oid_to_hex(&object));
 	}
 
 	prepare_note_data(&object, &d, note);
@@ -473,9 +471,8 @@ static int add(int argc, const char **argv, const char *prefix)
 			BUG("combine_notes_overwrite failed");
 		commit_notes(t, "Notes added by 'git notes add'");
 	} else {
-		if (!quiet)
-			fprintf(stderr, _("Removing note for object %s\n"),
-				oid_to_hex(&object));
+		fprintf(stderr, _("Removing note for object %s\n"),
+			oid_to_hex(&object));
 		remove_note(t, object.hash);
 		commit_notes(t, "Notes removed by 'git notes add'");
 	}
@@ -906,7 +903,7 @@ static int remove_one_note(struct notes_tree *t, const char *name, unsigned flag
 static int remove_cmd(int argc, const char **argv, const char *prefix)
 {
 	unsigned flag = 0;
-	int from_stdin = 0, quiet = 0;
+	int from_stdin = 0;
 	struct option options[] = {
 		OPT_BIT(0, "ignore-missing", &flag,
 			N_("attempt to remove non-existent note is not an error"),

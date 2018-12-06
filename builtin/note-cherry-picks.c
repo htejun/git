@@ -99,7 +99,7 @@ static void clear_cherry_pick_note(struct commit *commit, void *prefix)
 	struct argv_array args;
 
 	argv_array_init(&args);
-	argv_array_pushl(&args, "notes", "--ref", "cherry-picks", "remove",
+	argv_array_pushl(&args, "notes", "--ref", "xref-cherry-picks", "remove",
 			 "--ignore-missing",
 			 oid_to_hex(&commit->object.oid), NULL);
 	cmd_notes(args.argc, args.argv, prefix);

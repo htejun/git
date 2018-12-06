@@ -1248,24 +1248,56 @@ void free_notes(struct notes_tree *t)
 	memset(t, 0, sizeof(struct notes_tree));
 }
 
-static void walk_cherry_picks(struct object_id *from_oid, struct strbuf *sb,
-			      int level)
+/*
+ * Parse a "[PREFIX ]OID" line.  @xref is right trimmed.  If @prefix_p is
+ * not NULL and PREFIX exists, the string is split.  Returns the pointer to
+ * the OID and *@prefix_p is updated to the PREFIX if requested.
+ */
+static char *parse_xref(char *xref, char **prefix_p)
 {
-	struct object_array cps = OBJECT_ARRAY_INIT;
+	char *p;
+
+	p = xref + strlen(xref) - 1;
+	while (p >= xref && isspace(*p))
+		*p-- = '\0';
+
+	p = strrchr(xref, ' ');
+	if (p) {
+		if (prefix_p) {
+			*prefix_p = xref;
+			*p = '\0';
+		}
+		return p + 1;
+	} else {
+		if (prefix_p)
+			*prefix_p = "";
+		return xref;
+	}
+}
+
+static void walk_xrefs(const char *tree_ref, struct object_id *from_oid,
+		       struct strbuf *sb, int level)
+{
+	struct object_array xrefs = OBJECT_ARRAY_INIT;
+	struct string_list lines = STRING_LIST_INIT_DUP;
 	int i;
 
-	read_xref_note(NOTES_CHERRY_PICKS_REF, from_oid, &cps, NULL);
+	read_xref_note(tree_ref, from_oid, &xrefs, &lines);
 
-	for (i = 0; i < cps.nr; i++) {
+	for (i = 0; i < xrefs.nr; i++) {
+		char *line = lines.items[i].string;
+		char *prefix;
+
+		parse_xref(line, &prefix);
 		strbuf_addf(sb, "    %s%*s%s\n",
-			    NOTES_CHERRY_PICKED_TO, 2 * level, "",
-			    cps.objects[i].name);
-		if (cps.objects[i].item)
-			walk_cherry_picks(&cps.objects[i].item->oid, sb,
-					  level + 1);
+			    prefix, 2 * level, "", xrefs.objects[i].name);
+		if (xrefs.objects[i].item)
+			walk_xrefs(tree_ref, &xrefs.objects[i].item->oid, sb,
+				   level + 1);
 	}
 
-	object_array_clear(&cps);
+	object_array_clear(&xrefs);
+	string_list_clear(&lines, 0);
 }
 
 /*
@@ -1287,7 +1319,7 @@ static void format_note(struct notes_tree *t, const struct object_id *object_oid
 	char *msg, *msg_p;
 	unsigned long linelen, msglen;
 	enum object_type type;
-	int format_cherry_picks;
+	int format_xrefs;
 
 	if (!t)
 		t = &default_notes_tree;
@@ -1330,7 +1362,7 @@ static void format_note(struct notes_tree *t, const struct object_id *object_oid
 		}
 	}
 
-	format_cherry_picks = !raw && !strcmp(t->ref, "refs/notes/cherry-picks");
+	format_xrefs = !raw && starts_with(t->ref, "refs/notes/xref-");
 
 	for (msg_p = msg; msg_p < msg + msglen; msg_p += linelen + 1) {
 		linelen = strchrnul(msg_p, '\n') - msg_p;
@@ -1340,15 +1372,12 @@ static void format_note(struct notes_tree *t, const struct object_id *object_oid
 		strbuf_add(sb, msg_p, linelen);
 		strbuf_addch(sb, '\n');
 
-		if (format_cherry_picks &&
-		    starts_with(msg_p, NOTES_CHERRY_PICKED_TO)) {
+		if (format_xrefs) {
 			struct object_id oid;
 
-			if (get_oid_hex(msg_p + strlen(NOTES_CHERRY_PICKED_TO),
-					&oid))
-				continue;
-
-			walk_cherry_picks(&oid, sb, 1);
+			msg_p[linelen] = '\0';
+			if (!get_oid_hex(parse_xref(msg_p, NULL), &oid))
+				walk_xrefs(t->ref, &oid, sb, 1);
 		}
 	}
 
@@ -1433,16 +1462,7 @@ static void parse_xref_note(const char *note, unsigned long size,
 		struct object_id target_oid;
 		struct object *target_obj;
 
-		strbuf_rtrim(line);
-		if (!line->len)
-			continue;
-
-		target_hex = strrchr(line->buf, ' ');
-		if (target_hex)
-			target_hex++;
-		else
-			target_hex = line->buf;
-
+		target_hex = parse_xref(line->buf, NULL);
 		if (get_oid_hex(target_hex, &target_oid)) {
 			if (commit_oid)
 				warning("read invalid sha1 on %s: %s",
@@ -1471,7 +1491,7 @@ static void parse_xref_note(const char *note, unsigned long size,
 /*
  * Read a cross-referencing note.
  *
- * Notes in @notes_ref contains lines of "[PREFIX] OID" pointing to other
+ * Notes in @notes_ref contains lines of "[PREFIX ]OID" pointing to other
  * commits.  Read the target commits and add the objects to @result.  If
  * @result_lines is non-NULL, it should point to a strdup'ing string_list.
  * The verbatim note lines matching the target commits are appened to the

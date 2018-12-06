@@ -7,7 +7,7 @@
 struct object_id;
 struct strbuf;
 
-#define NOTES_CHERRY_PICKS_REF		"refs/notes/cherry-picks"
+#define NOTES_CHERRY_PICKS_REF		"refs/notes/xref-cherry-picks"
 #define NOTES_CHERRY_PICKED_TO		"Cherry-picked-to: "
 
 /*
