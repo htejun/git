@@ -4,7 +4,9 @@
 #include "repository.h"
 #include "config.h"
 #include "commit.h"
+#include "blob.h"
 #include "notes.h"
+#include "notes-utils.h"
 #include "trailer.h"
 #include "revision.h"
 #include "argv-array.h"
@@ -38,25 +40,15 @@ static struct object_array *get_create_commit_cherry_picks(struct commit *commit
 {
 	struct object_array **slot =
 		commit_cherry_picks_at(&cherry_picks, commit);
-	struct object_array *cps = *slot;
-	int i;
 
-	if (cps)
-		return cps;
+	if (*slot)
+		return *slot;
 
 	add_object_array(&commit->object, oid_to_hex(&commit->object.oid),
 			 &cherry_picked);
-	*slot = cps = xmalloc(sizeof(struct object_array));
-	*cps = (struct object_array)OBJECT_ARRAY_INIT;
-
-	read_xref_note(NOTES_CHERRY_PICKS_REF, &commit->object.oid, cps, NULL);
-	if (verbose) {
-		for (i = 0; i < cps->nr; i++)
-			fprintf(stderr, "Read  note %s -> %s\n",
-				oid_to_hex(&commit->object.oid),
-				cps->objects[i].name);
-	}
-	return cps;
+	*slot = xmalloc(sizeof(struct object_array));
+	**slot = (struct object_array)OBJECT_ARRAY_INIT;
+	return *slot;
 }
 
 static void record_cherry_pick(struct commit *commit, void *unused)
@@ -94,10 +86,7 @@ static void record_cherry_pick(struct commit *commit, void *unused)
 			from_cps = get_create_commit_cherry_picks(from_commit);
 
 			oid_to_hex_r(cherry_hex, &commit->object.oid);
-
-			if (!object_array_contains_name(from_cps, cherry_hex))
-				add_object_array(&commit->object, cherry_hex,
-						 from_cps);
+			add_object_array(&commit->object, cherry_hex, from_cps);
 			break;
 		}
 	}
@@ -116,12 +105,13 @@ static void clear_cherry_pick_note(struct commit *commit, void *prefix)
 	cmd_notes(args.argc, args.argv, prefix);
 }
 
-static int note_cherry_picks(struct commit *commit, const char *prefix)
+static int note_cherry_picks(struct notes_tree *tree, struct commit *commit,
+			     const char *prefix)
 {
 	char from_hex[GIT_MAX_HEXSZ + 1];
 	struct strbuf note = STRBUF_INIT;
-	struct argv_array args;
 	struct object_array *cps;
+	struct object_id note_oid;
 	int i, ret;
 
 	cps = get_commit_cherry_picks(commit);
@@ -139,18 +129,19 @@ static int note_cherry_picks(struct commit *commit, const char *prefix)
 				from_hex, cherry_hex);
 	}
 
-	argv_array_init(&args);
-	argv_array_pushl(&args, "notes", "--ref", "cherry-picks", "add",
-			 "--force", "--message", note.buf, from_hex, NULL);
-	if (!verbose)
-		argv_array_push(&args, "--quiet");
-	ret = cmd_notes(args.argc, args.argv, prefix);
+	ret = write_object_file(note.buf, note.len, blob_type, &note_oid);
 	strbuf_release(&note);
+	if (ret)
+		return ret;
+
+	ret = add_note(tree, &commit->object.oid, &note_oid,
+		       combine_notes_cat_xrefs);
 	return ret;
 }
 
 int cmd_note_cherry_picks(int argc, const char **argv, const char *prefix)
 {
+	static struct notes_tree tree;
 	struct rev_info revs;
 	int i, ret;
 	struct setup_revision_opt s_r_opt = {
@@ -184,14 +175,18 @@ int cmd_note_cherry_picks(int argc, const char **argv, const char *prefix)
 	init_commit_cherry_picks(&cherry_picks);
 	traverse_commit_list(&revs, record_cherry_pick, NULL, NULL);
 
-	object_array_remove_duplicates(&cherry_picked);
+	if (!tree.initialized)
+		init_notes(&tree, NOTES_CHERRY_PICKS_REF, NULL,
+			   NOTES_INIT_WRITABLE);
 
 	for (i = 0; i < cherry_picked.nr; i++) {
-		ret = note_cherry_picks((void *)cherry_picked.objects[i].item,
+		ret = note_cherry_picks(&tree,
+					(void *)cherry_picked.objects[i].item,
 					prefix);
 		if (ret)
 			return ret;
 	}
+	commit_notes(&tree, "Notes added by 'git note-cherry-picks'");
 
 	return 0;
 }

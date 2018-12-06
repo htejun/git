@@ -80,6 +80,10 @@ static struct notes_tree **display_notes_trees;
 
 static void load_subtree(struct notes_tree *t, struct leaf_node *subtree,
 		struct int_node *node, unsigned int n);
+static void parse_xref_note(const char *note, unsigned long size,
+			    const struct object_id *commit_oid,
+			    struct object_array *result,
+			    struct string_list *result_lines);
 
 /*
  * Search the tree until the appropriate location for the given key is found:
@@ -915,6 +919,60 @@ out:
 	return ret;
 }
 
+int combine_notes_cat_xrefs(struct object_id *cur_oid,
+			    const struct object_id *new_oid)
+{
+	char *cur_msg = NULL, *new_msg = NULL;
+	unsigned long cur_len, new_len;
+	enum object_type cur_type, new_type;
+	struct object_array xrefs = OBJECT_ARRAY_INIT;
+	struct string_list lines = STRING_LIST_INIT_DUP;
+	struct strbuf output = STRBUF_INIT;
+	int i, j, cur_nr, ret;
+
+	/* read in both note blob objects */
+	if (!is_null_oid(new_oid))
+		new_msg = read_object_file(new_oid, &new_type, &new_len);
+	if (!new_msg || !new_len || new_type != OBJ_BLOB) {
+		free(new_msg);
+		return 0;
+	}
+	if (!is_null_oid(cur_oid))
+		cur_msg = read_object_file(cur_oid, &cur_type, &cur_len);
+	if (!cur_msg || !cur_len || cur_type != OBJ_BLOB) {
+		free(cur_msg);
+		free(new_msg);
+		oidcpy(cur_oid, new_oid);
+		return 0;
+	}
+
+	/* parse xrefs and de-dup */
+	parse_xref_note(cur_msg, cur_len, NULL, &xrefs, &lines);
+	cur_nr = xrefs.nr;
+	parse_xref_note(new_msg, new_len, NULL, &xrefs, &lines);
+
+	for (i = 0; i < cur_nr; i++)
+		for (j = cur_nr; j < xrefs.nr; j++)
+			if (!strcmp(xrefs.objects[i].name,
+				    xrefs.objects[j].name))
+				lines.items[j].string[0] = '\0';
+
+	/* write out the combined object */
+	for (i = 0; i < lines.nr; i++)
+		if (lines.items[i].string[0] != '\0')
+			strbuf_addf(&output, "%s\n", lines.items[i].string);
+
+	ret = write_object_file(output.buf, output.len, blob_type, cur_oid);
+
+	strbuf_release(&output);
+	object_array_clear(&xrefs);
+	string_list_clear(&lines, 0);
+	free(cur_msg);
+	free(new_msg);
+
+	return ret;
+}
+
 static int string_list_add_one_ref(const char *refname, const struct object_id *oid,
 				   int flag, void *cb)
 {
@@ -1360,14 +1418,64 @@ static int notes_tree_cmp(const void *hashmap_cmp_fn_data,
 	return strcmp(e1->tree.ref, e2->tree.ref);
 }
 
+static void parse_xref_note(const char *note, unsigned long size,
+			    const struct object_id *commit_oid,
+			    struct object_array *result,
+			    struct string_list *result_lines)
+{
+	struct strbuf **lines, **pline;
+
+	lines = strbuf_split_buf(note, size, '\n', 0);
+
+	for (pline = lines; *pline; pline++) {
+		struct strbuf *line = *pline;
+		const char *target_hex;
+		struct object_id target_oid;
+		struct object *target_obj;
+
+		strbuf_rtrim(line);
+		if (!line->len)
+			continue;
+
+		target_hex = strrchr(line->buf, ' ');
+		if (target_hex)
+			target_hex++;
+		else
+			target_hex = line->buf;
+
+		if (get_oid_hex(target_hex, &target_oid)) {
+			if (commit_oid)
+				warning("read invalid sha1 on %s: %s",
+					oid_to_hex(commit_oid), line->buf);
+			continue;
+		}
+
+		target_obj = parse_object(the_repository, &target_oid);
+		if (!target_obj || target_obj->type != OBJ_COMMIT) {
+			if (commit_oid)
+				warning("read invalid commit on %s: %s",
+					oid_to_hex(commit_oid), line->buf);
+			continue;
+		}
+
+		add_object_array(target_obj, target_hex, result);
+		if (result_lines) {
+			assert(result_lines->strdup_strings);
+			string_list_append(result_lines, line->buf);
+		}
+	}
+
+	strbuf_list_free(lines);
+}
+
 /*
  * Read a cross-referencing note.
  *
  * Notes in @notes_ref contains lines of "[PREFIX] OID" pointing to other
  * commits.  Read the target commits and add the objects to @result.  If
- * @result_lines is non-NULL, it should point to a STRING_LIST_INIT_DUP
- * string_list.  The verbatim note lines matching the target commits are
- * appened to the list.
+ * @result_lines is non-NULL, it should point to a strdup'ing string_list.
+ * The verbatim note lines matching the target commits are appened to the
+ * list.
  */
 void read_xref_note(const char *notes_ref, const struct object_id *commit_oid,
 		    struct object_array *result,
@@ -1380,7 +1488,6 @@ void read_xref_note(const char *notes_ref, const struct object_id *commit_oid,
 	unsigned long size;
 	enum object_type type;
 	char *note;
-	struct strbuf **lines, **pline;
 
 	if (!notes_tree_map) {
 		notes_tree_map = xcalloc(1, sizeof(struct hashmap));
@@ -1407,44 +1514,6 @@ void read_xref_note(const char *notes_ref, const struct object_id *commit_oid,
 		return;
 	}
 
-	lines = strbuf_split_buf(note, size, '\n', 0);
-
-	for (pline = lines; *pline; pline++) {
-		struct strbuf *line = *pline;
-		const char *target_hex;
-		struct object_id target_oid;
-		struct object *target_obj;
-
-		strbuf_rtrim(line);
-		if (!line->len)
-			continue;
-
-		target_hex = strrchr(line->buf, ' ');
-		if (target_hex)
-			target_hex++;
-		else
-			target_hex = line->buf;
-
-		if (get_oid_hex(target_hex, &target_oid)) {
-			warning("read invalid sha1 on %s: %s",
-				oid_to_hex(commit_oid), line->buf);
-			continue;
-		}
-
-		target_obj = parse_object(the_repository, &target_oid);
-		if (!target_obj || target_obj->type != OBJ_COMMIT) {
-			warning("read invalid commit on %s: %s",
-				oid_to_hex(commit_oid), line->buf);
-			continue;
-		}
-
-		add_object_array(target_obj, target_hex, result);
-		if (result_lines) {
-			assert(result_lines->strdup_strings);
-			string_list_append(result_lines, line->buf);
-		}
-	}
-
-	strbuf_list_free(lines);
+	parse_xref_note(note, size, commit_oid, result, result_lines);
 	free(note);
 }
