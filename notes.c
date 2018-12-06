@@ -1281,7 +1281,7 @@ static char *parse_xref(char *xref, char **tag_p)
 	}
 
 	p = hex;
-	while (!isspace(*p))
+	while (*p != '\0' && !isspace(*p))
 		p++;
 	*p = '\0';
 	return hex;
