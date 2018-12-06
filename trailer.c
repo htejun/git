@@ -2,6 +2,7 @@
 #include "config.h"
 #include "string-list.h"
 #include "run-command.h"
+#include "object-store.h"
 #include "commit.h"
 #include "tempfile.h"
 #include "trailer.h"
@@ -1169,4 +1170,105 @@ void format_trailers_from_commit(struct strbuf *out, const char *msg,
 	trailer_info_get(&info, msg, opts);
 	format_trailer_info(out, &info, opts);
 	trailer_info_release(&info);
+}
+
+implement_static_commit_slab(trailer_rxrefs_slab, struct object_array *);
+
+static struct object_array *get_trailer_rxrefs(
+			struct trailer_rev_xrefs *rxrefs, struct commit *commit)
+{
+	struct object_array **slot =
+		trailer_rxrefs_slab_peek(&rxrefs->slab, commit);
+
+	return slot ? *slot : NULL;
+}
+
+static struct object_array *get_create_trailer_rxrefs(
+			struct trailer_rev_xrefs *rxrefs, struct commit *commit)
+{
+	struct object_array **slot =
+		trailer_rxrefs_slab_at(&rxrefs->slab, commit);
+
+	if (*slot)
+		return *slot;
+
+	add_object_array(&commit->object, oid_to_hex(&commit->object.oid),
+			 &rxrefs->from_commits);
+	*slot = xmalloc(sizeof(struct object_array));
+	**slot = (struct object_array)OBJECT_ARRAY_INIT;
+	return *slot;
+}
+
+void trailer_rev_xrefs_init(struct trailer_rev_xrefs *rxrefs, const char *tag)
+{
+	rxrefs->tag = xstrdup(tag);
+	rxrefs->tag_len = strlen(tag);
+	init_trailer_rxrefs_slab(&rxrefs->slab);
+	rxrefs->from_commits = (struct object_array)OBJECT_ARRAY_INIT;
+}
+
+void trailer_rev_xrefs_record(struct trailer_rev_xrefs *rxrefs,
+			      struct commit *commit)
+{
+	struct process_trailer_options opts = PROCESS_TRAILER_OPTIONS_INIT;
+	enum object_type type;
+	unsigned long size;
+	void *buffer;
+	struct trailer_info info;
+	int i;
+
+	buffer = read_object_file(&commit->object.oid, &type, &size);
+	trailer_info_get(&info, buffer, &opts);
+
+	/* when nested, the last trailer describes the latest cherry-pick */
+	for (i = info.trailer_nr - 1; i >= 0; i--) {
+		char *line = info.trailers[i];
+
+		if (starts_with(line, rxrefs->tag)) {
+			struct object_id from_oid;
+			struct object *from_object;
+			struct commit *from_commit;
+			struct object_array *to_objs;
+			char cherry_hex[GIT_MAX_HEXSZ + 1];
+
+			if (get_oid_hex(line + rxrefs->tag_len, &from_oid))
+				continue;
+
+			from_object = parse_object(the_repository, &from_oid);
+			if (!from_object || from_object->type != OBJ_COMMIT)
+				continue;
+
+			from_commit = (struct commit *)from_object;
+			to_objs = get_create_trailer_rxrefs(rxrefs, from_commit);
+
+			oid_to_hex_r(cherry_hex, &commit->object.oid);
+			add_object_array(&commit->object, cherry_hex, to_objs);
+			break;
+		}
+	}
+
+	free(buffer);
+}
+
+void trailer_rev_xrefs_release(struct trailer_rev_xrefs *rxrefs)
+{
+	clear_trailer_rxrefs_slab(&rxrefs->slab);
+	object_array_clear(&rxrefs->from_commits);
+	free(rxrefs->tag);
+}
+
+void trailer_rev_xrefs_next(struct trailer_rev_xrefs *rxrefs, int *idx_p,
+			    struct commit **from_commit_p,
+			    struct object_array **to_objs_p)
+{
+	if (*idx_p >= rxrefs->from_commits.nr) {
+		*from_commit_p = NULL;
+		*to_objs_p = NULL;
+		return;
+	}
+
+	*from_commit_p = (struct commit *)
+		rxrefs->from_commits.objects[*idx_p].item;
+	*to_objs_p = get_trailer_rxrefs(rxrefs, *from_commit_p);
+	(*idx_p)++;
 }

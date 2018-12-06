@@ -2,6 +2,8 @@
 #define TRAILER_H
 
 #include "list.h"
+#include "object.h"
+#include "commit-slab.h"
 
 struct strbuf;
 
@@ -98,5 +100,29 @@ void trailer_info_release(struct trailer_info *info);
  */
 void format_trailers_from_commit(struct strbuf *out, const char *msg,
 				 const struct process_trailer_options *opts);
+
+declare_commit_slab(trailer_rxrefs_slab, struct object_array *);
+
+struct trailer_rev_xrefs {
+	char *tag;
+	int tag_len;
+	struct trailer_rxrefs_slab slab;
+	struct object_array from_commits;
+};
+
+void trailer_rev_xrefs_init(struct trailer_rev_xrefs *rxrefs, const char *tag);
+void trailer_rev_xrefs_record(struct trailer_rev_xrefs *rxrefs,
+			      struct commit *commit);
+void trailer_rev_xrefs_release(struct trailer_rev_xrefs *rxrefs);
+
+void trailer_rev_xrefs_next(struct trailer_rev_xrefs *rxrefs,
+			    int *idx_p, struct commit **from_commit_p,
+			    struct object_array **to_objs_p);
+
+#define trailer_rev_xrefs_for_each(rxrefs, idx, from_commit, to_objs)		\
+	for ((idx) = 0,								\
+	     trailer_rev_xrefs_next(rxrefs, &(idx), &(from_commit), &(to_objs));\
+	     (from_commit);							\
+	     trailer_rev_xrefs_next(rxrefs, &(idx), &(from_commit), &(to_objs)))
 
 #endif /* TRAILER_H */

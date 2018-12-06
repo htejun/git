@@ -1253,11 +1253,11 @@ void free_notes(struct notes_tree *t)
 }
 
 /*
- * Parse a "[PREFIX:]HEX" line.  @xref is trimmed.  If @prefix_p is not
- * NULL and PREFIX exists, the string is split.  Returns the pointer to the
- * OID and *@prefix_p is updated to the PREFIX if requested.
+ * Parse a "[TAG:]HEX" line.  @xref is trimmed.  If @tag_p is not NULL and
+ * TAG exists, the string is split.  Returns the pointer to the OID and
+ * *@tag_p is updated to the TAG if requested.
  */
-static char *parse_xref(char *xref, char **prefix_p)
+static char *parse_xref(char *xref, char **tag_p)
 {
 	char *p, *hex;
 
@@ -1266,8 +1266,8 @@ static char *parse_xref(char *xref, char **prefix_p)
 
 	p = strchr(xref, ':');
 	if (p) {
-		if (prefix_p) {
-			*prefix_p = xref;
+		if (tag_p) {
+			*tag_p = xref;
 			*p = '\0';
 		}
 		p++;
@@ -1275,8 +1275,8 @@ static char *parse_xref(char *xref, char **prefix_p)
 			p++;
 		hex = p;
 	} else {
-		if (prefix_p)
-			*prefix_p = NULL;
+		if (tag_p)
+			*tag_p = NULL;
 		hex = xref;
 	}
 
@@ -1298,11 +1298,11 @@ static void walk_xrefs(const char *tree_ref, struct object_id *from_oid,
 
 	for (i = 0; i < xrefs.nr; i++) {
 		char *line = lines.items[i].string;
-		char *prefix;
+		char *tag;
 
-		parse_xref(line, &prefix);
+		parse_xref(line, &tag);
 		strbuf_addf(sb, "    %s%s%*s%s\n",
-			    prefix ?: "", prefix ? ": " : "", 2 * level, "",
+			    tag ?: "", tag ? ": " : "", 2 * level, "",
 			    xrefs.objects[i].name);
 		if (xrefs.objects[i].item)
 			walk_xrefs(tree_ref, &xrefs.objects[i].item->oid, sb,
@@ -1504,7 +1504,7 @@ static void parse_xref_note(const char *note, unsigned long size,
 /*
  * Read a cross-referencing note.
  *
- * Notes in @notes_ref contains lines of "[PREFIX:]HEX" pointing to other
+ * Notes in @notes_ref contains lines of "[TAG:]HEX" pointing to other
  * commits.  Read the target commits and add the objects to @result.  If
  * @result_lines is non-NULL, it should point to a strdup'ing string_list.
  * The verbatim note lines matching the target commits are appened to the

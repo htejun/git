@@ -10,12 +10,9 @@
 #include "trailer.h"
 #include "revision.h"
 #include "argv-array.h"
-#include "commit-slab.h"
 #include "list-objects.h"
 #include "object-store.h"
 #include "parse-options.h"
-
-define_commit_slab(commit_cherry_picks, struct object_array *);
 
 static const char * const note_cherry_picks_usage[] = {
 	N_("git note-cherry-picks [<options>] [<commit-ish>...]"),
@@ -23,76 +20,7 @@ static const char * const note_cherry_picks_usage[] = {
 };
 
 static const char cherry_picked_prefix[] = "(cherry picked from commit ";
-static const char cherry_picked_to_tag[] = "Cherry-picked-to: ";
 static int verbose, clear;
-static struct object_array cherry_picked = OBJECT_ARRAY_INIT;
-static struct commit_cherry_picks cherry_picks;
-
-static struct object_array *get_commit_cherry_picks(struct commit *commit)
-{
-	struct object_array **slot =
-		commit_cherry_picks_peek(&cherry_picks, commit);
-
-	return slot ? *slot : NULL;
-}
-
-static struct object_array *get_create_commit_cherry_picks(struct commit *commit)
-{
-	struct object_array **slot =
-		commit_cherry_picks_at(&cherry_picks, commit);
-
-	if (*slot)
-		return *slot;
-
-	add_object_array(&commit->object, oid_to_hex(&commit->object.oid),
-			 &cherry_picked);
-	*slot = xmalloc(sizeof(struct object_array));
-	**slot = (struct object_array)OBJECT_ARRAY_INIT;
-	return *slot;
-}
-
-static void record_cherry_pick(struct commit *commit, void *unused)
-{
-	struct process_trailer_options opts = PROCESS_TRAILER_OPTIONS_INIT;
-	enum object_type type;
-	unsigned long size;
-	void *buffer;
-	struct trailer_info info;
-	int i;
-
-	buffer = read_object_file(&commit->object.oid, &type, &size);
-	trailer_info_get(&info, buffer, &opts);
-
-	/* when nested, the last trailer describes the latest cherry-pick */
-	for (i = info.trailer_nr - 1; i >= 0; i--) {
-		const int prefix_len = sizeof(cherry_picked_prefix) - 1;
-		char *line = info.trailers[i];
-
-		if (!strncmp(line, cherry_picked_prefix, prefix_len)) {
-			struct object_id from_oid;
-			struct object *from_object;
-			struct commit *from_commit;
-			struct object_array *from_cps;
-			char cherry_hex[GIT_MAX_HEXSZ + 1];
-
-			if (get_oid_hex(line + prefix_len, &from_oid))
-				continue;
-
-			from_object = parse_object(the_repository, &from_oid);
-			if (!from_object || from_object->type != OBJ_COMMIT)
-				continue;
-
-			from_commit = (struct commit *)from_object;
-			from_cps = get_create_commit_cherry_picks(from_commit);
-
-			oid_to_hex_r(cherry_hex, &commit->object.oid);
-			add_object_array(&commit->object, cherry_hex, from_cps);
-			break;
-		}
-	}
-
-	free(buffer);
-}
 
 static void clear_cherry_pick_note(struct commit *commit, void *prefix)
 {
@@ -105,28 +33,30 @@ static void clear_cherry_pick_note(struct commit *commit, void *prefix)
 	cmd_notes(args.argc, args.argv, prefix);
 }
 
-static int note_cherry_picks(struct notes_tree *tree, struct commit *commit,
-			     const char *prefix)
+static void record_cherry_pick(struct commit *commit, void *data)
+{
+	trailer_rev_xrefs_record(data, commit);
+}
+
+static int note_cherry_picks(struct notes_tree *tree, struct commit *from_commit,
+			     struct object_array *to_objs, const char *tag)
 {
 	char from_hex[GIT_MAX_HEXSZ + 1];
 	struct strbuf note = STRBUF_INIT;
-	struct object_array *cps;
 	struct object_id note_oid;
 	int i, ret;
 
-	cps = get_commit_cherry_picks(commit);
-	if (!cps)
-		return 0;
+	oid_to_hex_r(from_hex, &from_commit->object.oid);
 
-	oid_to_hex_r(from_hex, &commit->object.oid);
+	for (i = 0; i < to_objs->nr; i++) {
+		const char *hex = to_objs->objects[i].name;
 
-	for (i = 0; i < cps->nr; i++) {
-		const char *cherry_hex = cps->objects[i].name;
-
-		strbuf_addf(&note, "%s%s\n", NOTES_CHERRY_PICKED_TO, cherry_hex);
+		if (tag)
+			strbuf_addf(&note, "%s: %s\n", tag, hex);
+		else
+			strbuf_addf(&note, "%s\n", tag);
 		if (verbose)
-			fprintf(stderr, "Write note %s -> %s\n",
-				from_hex, cherry_hex);
+			fprintf(stderr, "Write note %s -> %s\n", from_hex, hex);
 	}
 
 	ret = write_object_file(note.buf, note.len, blob_type, &note_oid);
@@ -134,7 +64,7 @@ static int note_cherry_picks(struct notes_tree *tree, struct commit *commit,
 	if (ret)
 		return ret;
 
-	ret = add_note(tree, &commit->object.oid, &note_oid, NULL);
+	ret = add_note(tree, &from_commit->object.oid, &note_oid, NULL);
 	return ret;
 }
 
@@ -142,6 +72,9 @@ int cmd_note_cherry_picks(int argc, const char **argv, const char *prefix)
 {
 	static struct notes_tree tree;
 	struct rev_info revs;
+	struct trailer_rev_xrefs rxrefs;
+	struct commit *from_commit;
+	struct object_array *to_objs;
 	int i, ret;
 	struct setup_revision_opt s_r_opt = {
 		.def = "HEAD",
@@ -171,20 +104,20 @@ int cmd_note_cherry_picks(int argc, const char **argv, const char *prefix)
 		return 0;
 	}
 
-	init_commit_cherry_picks(&cherry_picks);
-	traverse_commit_list(&revs, record_cherry_pick, NULL, NULL);
+	trailer_rev_xrefs_init(&rxrefs, cherry_picked_prefix);
+	traverse_commit_list(&revs, record_cherry_pick, NULL, &rxrefs);
 
 	if (!tree.initialized)
 		init_notes(&tree, NOTES_CHERRY_PICKS_REF, NULL,
 			   NOTES_INIT_WRITABLE);
 
-	for (i = 0; i < cherry_picked.nr; i++) {
-		ret = note_cherry_picks(&tree,
-					(void *)cherry_picked.objects[i].item,
-					prefix);
+	trailer_rev_xrefs_for_each(&rxrefs, i, from_commit, to_objs) {
+		ret = note_cherry_picks(&tree, from_commit, to_objs,
+					NOTES_CHERRY_PICKED_TO_TAG);
 		if (ret)
 			return ret;
 	}
+
 	commit_notes(&tree, "Notes added by 'git note-cherry-picks'");
 
 	return 0;

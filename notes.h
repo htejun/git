@@ -8,7 +8,7 @@ struct object_id;
 struct strbuf;
 
 #define NOTES_CHERRY_PICKS_REF		"refs/notes/xref-cherry-picks"
-#define NOTES_CHERRY_PICKED_TO		"Cherry-picked-to: "
+#define NOTES_CHERRY_PICKED_TO_TAG	"Cherry-picked-to"
 
 /*
  * Function type for combining two notes annotating the same object.
