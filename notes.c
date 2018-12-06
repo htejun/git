@@ -1055,8 +1055,12 @@ void init_notes(struct notes_tree *t, const char *notes_ref,
 	if (!notes_ref)
 		notes_ref = default_notes_ref();
 
-	if (!combine_notes)
-		combine_notes = combine_notes_concatenate;
+	if (!combine_notes) {
+		if (starts_with(notes_ref, "refs/notes/xref-"))
+			combine_notes = combine_notes_cat_xrefs;
+		else
+			combine_notes = combine_notes_concatenate;
+	}
 
 	t->root = (struct int_node *) xcalloc(1, sizeof(struct int_node));
 	t->first_non_note = NULL;

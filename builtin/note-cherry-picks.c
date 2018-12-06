@@ -134,8 +134,7 @@ static int note_cherry_picks(struct notes_tree *tree, struct commit *commit,
 	if (ret)
 		return ret;
 
-	ret = add_note(tree, &commit->object.oid, &note_oid,
-		       combine_notes_cat_xrefs);
+	ret = add_note(tree, &commit->object.oid, &note_oid, NULL);
 	return ret;
 }
 
