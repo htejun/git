@@ -14,15 +14,15 @@
 #include "object-store.h"
 #include "parse-options.h"
 
-static const char * const note_cherry_picks_usage[] = {
-	N_("git note-cherry-picks [<options>] [<commit-ish>...]"),
+static const char * const note_reverse_trailer_xrefs_usage[] = {
+	N_("git note_reverse_trailer_xrefs [<options>] [<commit-ish>...]"),
 	NULL
 };
 
 static const char cherry_picked_prefix[] = "(cherry picked from commit ";
 static int verbose, clear;
 
-static void clear_cherry_pick_note(struct commit *commit, void *data)
+static void clear_trailer_xref_note(struct commit *commit, void *data)
 {
 	struct notes_tree *tree = data;
 	int status;
@@ -39,13 +39,14 @@ static void clear_cherry_pick_note(struct commit *commit, void *data)
 	}
 }
 
-static void record_cherry_pick(struct commit *commit, void *data)
+static void record_trailer_xrefs(struct commit *commit, void *data)
 {
 	trailer_rev_xrefs_record(data, commit);
 }
 
-static int note_cherry_picks(struct notes_tree *tree, struct commit *from_commit,
-			     struct object_array *to_objs, const char *tag)
+static int note_trailer_xrefs(struct notes_tree *tree,
+			      struct commit *from_commit, struct object_array *to_objs,
+			      const char *tag)
 {
 	char from_hex[GIT_MAX_HEXSZ + 1];
 	struct strbuf note = STRBUF_INIT;
@@ -85,7 +86,7 @@ int cmd_note_reverse_trailer_xrefs(int argc, const char **argv,
 		.revarg_opt = REVARG_CANNOT_BE_FILENAME
 	};
 	struct option options[] = {
-		OPT_BOOL(0, "clear", &clear, N_("clear cherry-pick notes from the specified commits")),
+		OPT_BOOL(0, "clear", &clear, N_("clear trailer-xref notes from the specified commits")),
 		OPT__VERBOSE(&verbose, N_("verbose")),
 		OPT_END()
 	};
@@ -95,7 +96,7 @@ int cmd_note_reverse_trailer_xrefs(int argc, const char **argv,
 	init_revisions(&revs, prefix);
 	argc = setup_revisions(argc, argv, &revs, &s_r_opt);
 	argc = parse_options(argc, argv, prefix, options,
-			     note_cherry_picks_usage, 0);
+			     note_reverse_trailer_xrefs_usage, 0);
 	if (argc > 1)
 		die(_("unrecognized argument: %s"), argv[1]);
 
@@ -107,24 +108,24 @@ int cmd_note_reverse_trailer_xrefs(int argc, const char **argv,
 		die("revision walk setup failed");
 
 	if (clear) {
-		traverse_commit_list(&revs, clear_cherry_pick_note, NULL, &tree);
+		traverse_commit_list(&revs, clear_trailer_xref_note, NULL, &tree);
 	} else {
 		struct trailer_rev_xrefs rxrefs;
 		struct commit *from_commit;
 		struct object_array *to_objs;
 
 		trailer_rev_xrefs_init(&rxrefs, cherry_picked_prefix);
-		traverse_commit_list(&revs, record_cherry_pick, NULL, &rxrefs);
+		traverse_commit_list(&revs, record_trailer_xrefs, NULL, &rxrefs);
 
 		trailer_rev_xrefs_for_each(&rxrefs, i, from_commit, to_objs) {
-			ret = note_cherry_picks(&tree, from_commit, to_objs,
-						NOTES_CHERRY_PICKED_TO_TAG);
+			ret = note_trailer_xrefs(&tree, from_commit, to_objs,
+						 NOTES_CHERRY_PICKED_TO_TAG);
 			if (ret)
 				return ret;
 		}
 	}
 
-	commit_notes(&tree, "Notes updated by 'git note-cherry-picks'");
+	commit_notes(&tree, "Notes updated by 'git note-reverse-trailer-xrefs'");
 
 	return 0;
 }
