@@ -9,7 +9,6 @@
 #include "notes-utils.h"
 #include "trailer.h"
 #include "revision.h"
-#include "argv-array.h"
 #include "list-objects.h"
 #include "object-store.h"
 #include "parse-options.h"
@@ -20,7 +19,7 @@ static const char * const note_reverse_trailer_xrefs_usage[] = {
 };
 
 static const char cherry_picked_prefix[] = "(cherry picked from commit ";
-static int verbose, clear;
+static int verbose;
 
 static void clear_trailer_xref_note(struct commit *commit, void *data)
 {
@@ -85,8 +84,14 @@ int cmd_note_reverse_trailer_xrefs(int argc, const char **argv,
 		.def = "HEAD",
 		.revarg_opt = REVARG_CANNOT_BE_FILENAME
 	};
+	int cherry = 0, clear = 0;
+	const char *trailer_prefix = NULL, *notes_ref = NULL, *tag = NULL;
 	struct option options[] = {
-		OPT_BOOL(0, "clear", &clear, N_("clear trailer-xref notes from the specified commits")),
+		OPT_BOOL(0, "xref-cherry-picks", &cherry, N_("use options for xref-cherry-picks notes")),
+		OPT_STRING(0, "trailer-prefix", &trailer_prefix, N_("prefix"), N_("process trailers starting with <prefix>")),
+		OPT_STRING(0, "ref", &notes_ref, N_("notes-ref"), N_("update notes in <notes-ref>")),
+		OPT_STRING(0, "tag", &tag, N_("tag"), N_("tag xref notes with <tag>")),
+		OPT_BOOL(0, "clear", &clear, N_("clear trailer xref notes from the specified commits")),
 		OPT__VERBOSE(&verbose, N_("verbose")),
 		OPT_END()
 	};
@@ -97,12 +102,25 @@ int cmd_note_reverse_trailer_xrefs(int argc, const char **argv,
 	argc = setup_revisions(argc, argv, &revs, &s_r_opt);
 	argc = parse_options(argc, argv, prefix, options,
 			     note_reverse_trailer_xrefs_usage, 0);
+
+	/* allow inidividual options to override parts of --cherry */
+	if (cherry) {
+		if (!trailer_prefix)
+			trailer_prefix = cherry_picked_prefix;
+		if (!notes_ref)
+			notes_ref = NOTES_CHERRY_PICKS_REF;
+		if (!tag)
+			tag = NOTES_CHERRY_PICKED_TO_TAG;
+	}
+
+	if (!notes_ref || (!clear && (!trailer_prefix || !tag)))
+		die(_("insufficient arguments"));
+
 	if (argc > 1)
 		die(_("unrecognized argument: %s"), argv[1]);
 
 	if (!tree.initialized)
-		init_notes(&tree, NOTES_CHERRY_PICKS_REF, NULL,
-			   NOTES_INIT_WRITABLE);
+		init_notes(&tree, notes_ref, NULL, NOTES_INIT_WRITABLE);
 
 	if (prepare_revision_walk(&revs))
 		die("revision walk setup failed");
@@ -114,12 +132,12 @@ int cmd_note_reverse_trailer_xrefs(int argc, const char **argv,
 		struct commit *from_commit;
 		struct object_array *to_objs;
 
-		trailer_rev_xrefs_init(&rxrefs, cherry_picked_prefix);
+		trailer_rev_xrefs_init(&rxrefs, trailer_prefix);
 		traverse_commit_list(&revs, record_trailer_xrefs, NULL, &rxrefs);
 
 		trailer_rev_xrefs_for_each(&rxrefs, i, from_commit, to_objs) {
 			ret = note_trailer_xrefs(&tree, from_commit, to_objs,
-						 NOTES_CHERRY_PICKED_TO_TAG);
+						 tag);
 			if (ret)
 				return ret;
 		}
