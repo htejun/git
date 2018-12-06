@@ -74,7 +74,8 @@ static int note_cherry_picks(struct notes_tree *tree, struct commit *from_commit
 	return ret;
 }
 
-int cmd_note_cherry_picks(int argc, const char **argv, const char *prefix)
+int cmd_note_reverse_trailer_xrefs(int argc, const char **argv,
+				   const char *prefix)
 {
 	static struct notes_tree tree;
 	struct rev_info revs;
