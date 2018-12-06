@@ -22,15 +22,21 @@ static const char * const note_cherry_picks_usage[] = {
 static const char cherry_picked_prefix[] = "(cherry picked from commit ";
 static int verbose, clear;
 
-static void clear_cherry_pick_note(struct commit *commit, void *prefix)
+static void clear_cherry_pick_note(struct commit *commit, void *data)
 {
-	struct argv_array args;
+	struct notes_tree *tree = data;
+	int status;
 
-	argv_array_init(&args);
-	argv_array_pushl(&args, "notes", "--ref", "xref-cherry-picks", "remove",
-			 "--ignore-missing",
-			 oid_to_hex(&commit->object.oid), NULL);
-	cmd_notes(args.argc, args.argv, prefix);
+	status = remove_note(tree, commit->object.oid.hash);
+
+	if (verbose) {
+		if (status)
+			fprintf(stderr, "Object %s has no note\n",
+				oid_to_hex(&commit->object.oid));
+		else
+			fprintf(stderr, "Removing note for object %s\n",
+				oid_to_hex(&commit->object.oid));
+	}
 }
 
 static void record_cherry_pick(struct commit *commit, void *data)
@@ -56,7 +62,7 @@ static int note_cherry_picks(struct notes_tree *tree, struct commit *from_commit
 		else
 			strbuf_addf(&note, "%s\n", tag);
 		if (verbose)
-			fprintf(stderr, "Write note %s -> %s\n", from_hex, hex);
+			fprintf(stderr, "Adding note %s -> %s\n", from_hex, hex);
 	}
 
 	ret = write_object_file(note.buf, note.len, blob_type, &note_oid);
@@ -72,9 +78,6 @@ int cmd_note_cherry_picks(int argc, const char **argv, const char *prefix)
 {
 	static struct notes_tree tree;
 	struct rev_info revs;
-	struct trailer_rev_xrefs rxrefs;
-	struct commit *from_commit;
-	struct object_array *to_objs;
 	int i, ret;
 	struct setup_revision_opt s_r_opt = {
 		.def = "HEAD",
@@ -95,30 +98,32 @@ int cmd_note_cherry_picks(int argc, const char **argv, const char *prefix)
 	if (argc > 1)
 		die(_("unrecognized argument: %s"), argv[1]);
 
-	if (prepare_revision_walk(&revs))
-		die("revision walk setup failed");
-
-	if (clear) {
-		traverse_commit_list(&revs, clear_cherry_pick_note, NULL,
-				     (void *)prefix);
-		return 0;
-	}
-
-	trailer_rev_xrefs_init(&rxrefs, cherry_picked_prefix);
-	traverse_commit_list(&revs, record_cherry_pick, NULL, &rxrefs);
-
 	if (!tree.initialized)
 		init_notes(&tree, NOTES_CHERRY_PICKS_REF, NULL,
 			   NOTES_INIT_WRITABLE);
 
-	trailer_rev_xrefs_for_each(&rxrefs, i, from_commit, to_objs) {
-		ret = note_cherry_picks(&tree, from_commit, to_objs,
-					NOTES_CHERRY_PICKED_TO_TAG);
-		if (ret)
-			return ret;
+	if (prepare_revision_walk(&revs))
+		die("revision walk setup failed");
+
+	if (clear) {
+		traverse_commit_list(&revs, clear_cherry_pick_note, NULL, &tree);
+	} else {
+		struct trailer_rev_xrefs rxrefs;
+		struct commit *from_commit;
+		struct object_array *to_objs;
+
+		trailer_rev_xrefs_init(&rxrefs, cherry_picked_prefix);
+		traverse_commit_list(&revs, record_cherry_pick, NULL, &rxrefs);
+
+		trailer_rev_xrefs_for_each(&rxrefs, i, from_commit, to_objs) {
+			ret = note_cherry_picks(&tree, from_commit, to_objs,
+						NOTES_CHERRY_PICKED_TO_TAG);
+			if (ret)
+				return ret;
+		}
 	}
 
-	commit_notes(&tree, "Notes added by 'git note-cherry-picks'");
+	commit_notes(&tree, "Notes updated by 'git note-cherry-picks'");
 
 	return 0;
 }
