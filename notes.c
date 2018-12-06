@@ -1249,30 +1249,38 @@ void free_notes(struct notes_tree *t)
 }
 
 /*
- * Parse a "[PREFIX ]OID" line.  @xref is right trimmed.  If @prefix_p is
- * not NULL and PREFIX exists, the string is split.  Returns the pointer to
- * the OID and *@prefix_p is updated to the PREFIX if requested.
+ * Parse a "[PREFIX:]HEX" line.  @xref is trimmed.  If @prefix_p is not
+ * NULL and PREFIX exists, the string is split.  Returns the pointer to the
+ * OID and *@prefix_p is updated to the PREFIX if requested.
  */
 static char *parse_xref(char *xref, char **prefix_p)
 {
-	char *p;
+	char *p, *hex;
 
-	p = xref + strlen(xref) - 1;
-	while (p >= xref && isspace(*p))
-		*p-- = '\0';
+	while (isspace(*xref))
+		xref++;
 
-	p = strrchr(xref, ' ');
+	p = strchr(xref, ':');
 	if (p) {
 		if (prefix_p) {
 			*prefix_p = xref;
 			*p = '\0';
 		}
-		return p + 1;
+		p++;
+		while (isspace(*p))
+			p++;
+		hex = p;
 	} else {
 		if (prefix_p)
-			*prefix_p = "";
-		return xref;
+			*prefix_p = NULL;
+		hex = xref;
 	}
+
+	p = hex;
+	while (isxdigit(*p))
+		p++;
+	*p = '\0';
+	return hex;
 }
 
 static void walk_xrefs(const char *tree_ref, struct object_id *from_oid,
@@ -1289,8 +1297,9 @@ static void walk_xrefs(const char *tree_ref, struct object_id *from_oid,
 		char *prefix;
 
 		parse_xref(line, &prefix);
-		strbuf_addf(sb, "    %s%*s%s\n",
-			    prefix, 2 * level, "", xrefs.objects[i].name);
+		strbuf_addf(sb, "    %s%s%*s%s\n",
+			    prefix ?: "", prefix ? ": " : "", 2 * level, "",
+			    xrefs.objects[i].name);
 		if (xrefs.objects[i].item)
 			walk_xrefs(tree_ref, &xrefs.objects[i].item->oid, sb,
 				   level + 1);
@@ -1491,7 +1500,7 @@ static void parse_xref_note(const char *note, unsigned long size,
 /*
  * Read a cross-referencing note.
  *
- * Notes in @notes_ref contains lines of "[PREFIX ]OID" pointing to other
+ * Notes in @notes_ref contains lines of "[PREFIX:]HEX" pointing to other
  * commits.  Read the target commits and add the objects to @result.  If
  * @result_lines is non-NULL, it should point to a strdup'ing string_list.
  * The verbatim note lines matching the target commits are appened to the
