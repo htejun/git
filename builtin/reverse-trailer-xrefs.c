@@ -13,8 +13,8 @@
 #include "object-store.h"
 #include "parse-options.h"
 
-static const char * const note_reverse_trailer_xrefs_usage[] = {
-	N_("git note_reverse_trailer_xrefs [<options>] [<commit-ish>...]"),
+static const char * const reverse_trailer_xrefs_usage[] = {
+	N_("git reverse_trailer_xrefs [<options>] [<commit-ish>...]"),
 	NULL
 };
 
@@ -74,8 +74,7 @@ static int note_trailer_xrefs(struct notes_tree *tree,
 	return ret;
 }
 
-int cmd_note_reverse_trailer_xrefs(int argc, const char **argv,
-				   const char *prefix)
+int cmd_reverse_trailer_xrefs(int argc, const char **argv, const char *prefix)
 {
 	static struct notes_tree tree;
 	struct rev_info revs;
@@ -101,7 +100,7 @@ int cmd_note_reverse_trailer_xrefs(int argc, const char **argv,
 	init_revisions(&revs, prefix);
 	argc = setup_revisions(argc, argv, &revs, &s_r_opt);
 	argc = parse_options(argc, argv, prefix, options,
-			     note_reverse_trailer_xrefs_usage, 0);
+			     reverse_trailer_xrefs_usage, 0);
 
 	/* allow inidividual options to override parts of --cherry */
 	if (cherry) {
@@ -143,7 +142,7 @@ int cmd_note_reverse_trailer_xrefs(int argc, const char **argv,
 		}
 	}
 
-	commit_notes(&tree, "Notes updated by 'git note-reverse-trailer-xrefs'");
+	commit_notes(&tree, "Notes updated by 'git reverse-trailer-xrefs'");
 
 	return 0;
 }

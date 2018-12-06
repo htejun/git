@@ -195,7 +195,7 @@ extern int cmd_multi_pack_index(int argc, const char **argv, const char *prefix)
 extern int cmd_mv(int argc, const char **argv, const char *prefix);
 extern int cmd_name_rev(int argc, const char **argv, const char *prefix);
 extern int cmd_notes(int argc, const char **argv, const char *prefix);
-extern int cmd_note_reverse_trailer_xrefs(int argc, const char **argv, const char *prefix);
+extern int cmd_reverse_trailer_xrefs(int argc, const char **argv, const char *prefix);
 extern int cmd_pack_objects(int argc, const char **argv, const char *prefix);
 extern int cmd_pack_redundant(int argc, const char **argv, const char *prefix);
 extern int cmd_patch_id(int argc, const char **argv, const char *prefix);

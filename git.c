@@ -515,7 +515,7 @@ static struct cmd_struct commands[] = {
 	{ "mv", cmd_mv, RUN_SETUP | NEED_WORK_TREE },
 	{ "name-rev", cmd_name_rev, RUN_SETUP },
 	{ "notes", cmd_notes, RUN_SETUP },
-	{ "note-reverse-trailer-xrefs", cmd_note_reverse_trailer_xrefs, RUN_SETUP },
+	{ "reverse-trailer-xrefs", cmd_reverse_trailer_xrefs, RUN_SETUP },
 	{ "pack-objects", cmd_pack_objects, RUN_SETUP },
 	{ "pack-redundant", cmd_pack_redundant, RUN_SETUP | NO_PARSEOPT },
 	{ "pack-refs", cmd_pack_refs, RUN_SETUP },
