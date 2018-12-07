@@ -42,8 +42,6 @@ int combine_notes_ignore(struct object_id *cur_oid,
 			 const struct object_id *new_oid);
 int combine_notes_cat_sort_uniq(struct object_id *cur_oid,
 				const struct object_id *new_oid);
-int combine_notes_cat_xrefs(struct object_id *cur_oid,
-			    const struct object_id *new_oid);
 
 /*
  * Notes tree object
@@ -323,8 +321,12 @@ void expand_notes_ref(struct strbuf *sb);
  */
 void expand_loose_notes_ref(struct strbuf *sb);
 
+/* For refs/notes/xref- */
 void read_xref_note(const char *notes_ref, const struct object_id *commit_oid,
 		    struct object_array *result,
 		    struct string_list *result_lines);
+
+int combine_notes_cat_xrefs(struct object_id *cur_oid,
+			    const struct object_id *new_oid);
 
 #endif

@@ -80,10 +80,6 @@ static struct notes_tree **display_notes_trees;
 
 static void load_subtree(struct notes_tree *t, struct leaf_node *subtree,
 		struct int_node *node, unsigned int n);
-static void parse_xref_note(const char *note, unsigned long size,
-			    const struct object_id *commit_oid,
-			    struct object_array *result,
-			    struct string_list *result_lines);
 
 /*
  * Search the tree until the appropriate location for the given key is found:
@@ -919,60 +915,6 @@ out:
 	return ret;
 }
 
-int combine_notes_cat_xrefs(struct object_id *cur_oid,
-			    const struct object_id *new_oid)
-{
-	char *cur_msg = NULL, *new_msg = NULL;
-	unsigned long cur_len, new_len;
-	enum object_type cur_type, new_type;
-	struct object_array xrefs = OBJECT_ARRAY_INIT;
-	struct string_list lines = STRING_LIST_INIT_DUP;
-	struct strbuf output = STRBUF_INIT;
-	int i, j, cur_nr, ret;
-
-	/* read in both note blob objects */
-	if (!is_null_oid(new_oid))
-		new_msg = read_object_file(new_oid, &new_type, &new_len);
-	if (!new_msg || !new_len || new_type != OBJ_BLOB) {
-		free(new_msg);
-		return 0;
-	}
-	if (!is_null_oid(cur_oid))
-		cur_msg = read_object_file(cur_oid, &cur_type, &cur_len);
-	if (!cur_msg || !cur_len || cur_type != OBJ_BLOB) {
-		free(cur_msg);
-		free(new_msg);
-		oidcpy(cur_oid, new_oid);
-		return 0;
-	}
-
-	/* parse xrefs and de-dup */
-	parse_xref_note(cur_msg, cur_len, NULL, &xrefs, &lines);
-	cur_nr = xrefs.nr;
-	parse_xref_note(new_msg, new_len, NULL, &xrefs, &lines);
-
-	for (i = 0; i < cur_nr; i++)
-		for (j = cur_nr; j < xrefs.nr; j++)
-			if (!strcmp(xrefs.objects[i].name,
-				    xrefs.objects[j].name))
-				lines.items[j].string[0] = '\0';
-
-	/* write out the combined object */
-	for (i = 0; i < lines.nr; i++)
-		if (lines.items[i].string[0] != '\0')
-			strbuf_addf(&output, "%s\n", lines.items[i].string);
-
-	ret = write_object_file(output.buf, output.len, blob_type, cur_oid);
-
-	strbuf_release(&output);
-	object_array_clear(&xrefs);
-	string_list_clear(&lines, 0);
-	free(cur_msg);
-	free(new_msg);
-
-	return ret;
-}
-
 static int string_list_add_one_ref(const char *refname, const struct object_id *oid,
 				   int flag, void *cb)
 {
@@ -1253,23 +1195,26 @@ void free_notes(struct notes_tree *t)
 }
 
 /*
- * Parse a "[TAG:]HEX" line.  @xref is trimmed.  If @tag_p is not NULL and
- * TAG exists, the string is split.  Returns the pointer to the OID and
- * *@tag_p is updated to the TAG if requested.
+ * Parse a "[TAG:]HEX" line.  @line is trimmed.  If @tag_p is not NULL and
+ * TAG exists, the string is split.  Returns the pointer to OID and updates
+ * *@tag_p to point to TAG.
  */
-static char *parse_xref(char *xref, char **tag_p)
+static char *parse_xref(char *line, char **tag_p)
 {
 	char *p, *hex;
 
-	while (isspace(*xref))
-		xref++;
+	/* ltrim */
+	while (isspace(*line))
+		line++;
 
-	p = strchr(xref, ':');
+	p = strchr(line, ':');
 	if (p) {
 		if (tag_p) {
-			*tag_p = xref;
+			/* split and store TAG */
+			*tag_p = line;
 			*p = '\0';
 		}
+		/* trim whitespaces after ':' */
 		p++;
 		while (isspace(*p))
 			p++;
@@ -1277,9 +1222,10 @@ static char *parse_xref(char *xref, char **tag_p)
 	} else {
 		if (tag_p)
 			*tag_p = NULL;
-		hex = xref;
+		hex = line;
 	}
 
+	/* rtrim */
 	p = hex;
 	while (*p != '\0' && !isspace(*p))
 		p++;
@@ -1304,9 +1250,14 @@ static void walk_xrefs(const char *tree_ref, struct object_id *from_oid,
 		strbuf_addf(sb, "    %s%s%*s%s\n",
 			    tag ?: "", tag ? ": " : "", 2 * level, "",
 			    xrefs.objects[i].name);
-		if (xrefs.objects[i].item)
-			walk_xrefs(tree_ref, &xrefs.objects[i].item->oid, sb,
-				   level + 1);
+		if (xrefs.objects[i].item) {
+			if (level < 32)
+				walk_xrefs(tree_ref, &xrefs.objects[i].item->oid,
+					   sb, level + 1);
+			else
+				warning("xref nested deeper than %d levels, terminating walk",
+					level);
+		}
 	}
 
 	object_array_clear(&xrefs);
@@ -1445,21 +1396,14 @@ void expand_loose_notes_ref(struct strbuf *sb)
 	}
 }
 
-struct notes_tree_entry {
-	struct hashmap_entry ent;
-	struct notes_tree tree;
-};
-
-static int notes_tree_cmp(const void *hashmap_cmp_fn_data,
-			  const void *entry, const void *entry_or_key,
-			  const void *keydata)
-{
-	const struct notes_tree_entry *e1 = entry;
-	const struct notes_tree_entry *e2 = entry_or_key;
-
-	return strcmp(e1->tree.ref, e2->tree.ref);
-}
-
+/*
+ * Parse a cross-referencing note.
+ *
+ * @note contains lines of "[TAG:]HEX" pointing to other commits.  Read the
+ * target commits and add the objects to @result.  If @result_lines is not
+ * NULL, it should point to a strdup'ing string_list.  The verbatim note
+ * lines matching the target commits are appened to the list.
+ */
 static void parse_xref_note(const char *note, unsigned long size,
 			    const struct object_id *commit_oid,
 			    struct object_array *result,
@@ -1501,14 +1445,26 @@ static void parse_xref_note(const char *note, unsigned long size,
 	strbuf_list_free(lines);
 }
 
+struct notes_tree_entry {
+	struct hashmap_entry ent;
+	struct notes_tree tree;
+};
+
+static int notes_tree_cmp(const void *hashmap_cmp_fn_data,
+			  const void *entry, const void *entry_or_key,
+			  const void *keydata)
+{
+	const struct notes_tree_entry *e1 = entry;
+	const struct notes_tree_entry *e2 = entry_or_key;
+
+	return strcmp(e1->tree.ref, e2->tree.ref);
+}
+
 /*
- * Read a cross-referencing note.
+ * Read and parse a cross-referencing note.
  *
- * Notes in @notes_ref contains lines of "[TAG:]HEX" pointing to other
- * commits.  Read the target commits and add the objects to @result.  If
- * @result_lines is non-NULL, it should point to a strdup'ing string_list.
- * The verbatim note lines matching the target commits are appened to the
- * list.
+ * Read the @notes_ref note of @commit_oid and parse it with
+ * parse_xref_note().
  */
 void read_xref_note(const char *notes_ref, const struct object_id *commit_oid,
 		    struct object_array *result,
@@ -1549,4 +1505,63 @@ void read_xref_note(const char *notes_ref, const struct object_id *commit_oid,
 
 	parse_xref_note(note, size, commit_oid, result, result_lines);
 	free(note);
+}
+
+/*
+ * Combine a xref note in @new_oid into @cur_oid.  Unreachable or duplicate
+ * xrefs are dropped.  This is the default combine_notes callback for
+ * refs/notes/xref-.
+ */
+int combine_notes_cat_xrefs(struct object_id *cur_oid,
+			    const struct object_id *new_oid)
+{
+	char *cur_msg = NULL, *new_msg = NULL;
+	unsigned long cur_len, new_len;
+	enum object_type cur_type, new_type;
+	struct object_array xrefs = OBJECT_ARRAY_INIT;
+	struct string_list lines = STRING_LIST_INIT_DUP;
+	struct strbuf output = STRBUF_INIT;
+	int i, j, cur_nr, ret;
+
+	/* read in both note blob objects */
+	if (!is_null_oid(new_oid))
+		new_msg = read_object_file(new_oid, &new_type, &new_len);
+	if (!new_msg || !new_len || new_type != OBJ_BLOB) {
+		free(new_msg);
+		return 0;
+	}
+	if (!is_null_oid(cur_oid))
+		cur_msg = read_object_file(cur_oid, &cur_type, &cur_len);
+	if (!cur_msg || !cur_len || cur_type != OBJ_BLOB) {
+		free(cur_msg);
+		free(new_msg);
+		oidcpy(cur_oid, new_oid);
+		return 0;
+	}
+
+	/* parse xrefs and de-dup */
+	parse_xref_note(cur_msg, cur_len, NULL, &xrefs, &lines);
+	cur_nr = xrefs.nr;
+	parse_xref_note(new_msg, new_len, NULL, &xrefs, &lines);
+
+	for (i = 0; i < cur_nr; i++)
+		for (j = cur_nr; j < xrefs.nr; j++)
+			if (!strcmp(xrefs.objects[i].name,
+				    xrefs.objects[j].name))
+				lines.items[j].string[0] = '\0';
+
+	/* write out the combined object */
+	for (i = 0; i < lines.nr; i++)
+		if (lines.items[i].string[0] != '\0')
+			strbuf_addf(&output, "%s\n", lines.items[i].string);
+
+	ret = write_object_file(output.buf, output.len, blob_type, cur_oid);
+
+	strbuf_release(&output);
+	object_array_clear(&xrefs);
+	string_list_clear(&lines, 0);
+	free(cur_msg);
+	free(new_msg);
+
+	return ret;
 }

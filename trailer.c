@@ -1193,20 +1193,22 @@ static struct object_array *get_create_trailer_rxrefs(
 		return *slot;
 
 	add_object_array(&commit->object, oid_to_hex(&commit->object.oid),
-			 &rxrefs->from_commits);
+			 &rxrefs->dst_commits);
 	*slot = xmalloc(sizeof(struct object_array));
 	**slot = (struct object_array)OBJECT_ARRAY_INIT;
 	return *slot;
 }
 
-void trailer_rev_xrefs_init(struct trailer_rev_xrefs *rxrefs, const char *tag)
+void trailer_rev_xrefs_init(struct trailer_rev_xrefs *rxrefs,
+			    const char *trailer_prefix)
 {
-	rxrefs->tag = xstrdup(tag);
-	rxrefs->tag_len = strlen(tag);
+	rxrefs->trailer_prefix = xstrdup(trailer_prefix);
+	rxrefs->trailer_prefix_len = strlen(trailer_prefix);
 	init_trailer_rxrefs_slab(&rxrefs->slab);
-	rxrefs->from_commits = (struct object_array)OBJECT_ARRAY_INIT;
+	rxrefs->dst_commits = (struct object_array)OBJECT_ARRAY_INIT;
 }
 
+/* record the reverse mapping of @commit's xref trailer */
 void trailer_rev_xrefs_record(struct trailer_rev_xrefs *rxrefs,
 			      struct commit *commit)
 {
@@ -1224,25 +1226,26 @@ void trailer_rev_xrefs_record(struct trailer_rev_xrefs *rxrefs,
 	for (i = info.trailer_nr - 1; i >= 0; i--) {
 		char *line = info.trailers[i];
 
-		if (starts_with(line, rxrefs->tag)) {
-			struct object_id from_oid;
-			struct object *from_object;
-			struct commit *from_commit;
-			struct object_array *to_objs;
+		if (starts_with(line, rxrefs->trailer_prefix)) {
+			struct object_id dst_oid;
+			struct object *dst_object;
+			struct commit *dst_commit;
+			struct object_array *src_objs;
 			char cherry_hex[GIT_MAX_HEXSZ + 1];
 
-			if (get_oid_hex(line + rxrefs->tag_len, &from_oid))
+			if (get_oid_hex(line + rxrefs->trailer_prefix_len,
+					&dst_oid))
 				continue;
 
-			from_object = parse_object(the_repository, &from_oid);
-			if (!from_object || from_object->type != OBJ_COMMIT)
+			dst_object = parse_object(the_repository, &dst_oid);
+			if (!dst_object || dst_object->type != OBJ_COMMIT)
 				continue;
 
-			from_commit = (struct commit *)from_object;
-			to_objs = get_create_trailer_rxrefs(rxrefs, from_commit);
+			dst_commit = (struct commit *)dst_object;
+			src_objs = get_create_trailer_rxrefs(rxrefs, dst_commit);
 
 			oid_to_hex_r(cherry_hex, &commit->object.oid);
-			add_object_array(&commit->object, cherry_hex, to_objs);
+			add_object_array(&commit->object, cherry_hex, src_objs);
 			break;
 		}
 	}
@@ -1253,22 +1256,22 @@ void trailer_rev_xrefs_record(struct trailer_rev_xrefs *rxrefs,
 void trailer_rev_xrefs_release(struct trailer_rev_xrefs *rxrefs)
 {
 	clear_trailer_rxrefs_slab(&rxrefs->slab);
-	object_array_clear(&rxrefs->from_commits);
-	free(rxrefs->tag);
+	object_array_clear(&rxrefs->dst_commits);
+	free(rxrefs->trailer_prefix);
 }
 
 void trailer_rev_xrefs_next(struct trailer_rev_xrefs *rxrefs, int *idx_p,
-			    struct commit **from_commit_p,
-			    struct object_array **to_objs_p)
+			    struct commit **dst_commit_p,
+			    struct object_array **src_objs_p)
 {
-	if (*idx_p >= rxrefs->from_commits.nr) {
-		*from_commit_p = NULL;
-		*to_objs_p = NULL;
+	if (*idx_p >= rxrefs->dst_commits.nr) {
+		*dst_commit_p = NULL;
+		*src_objs_p = NULL;
 		return;
 	}
 
-	*from_commit_p = (struct commit *)
-		rxrefs->from_commits.objects[*idx_p].item;
-	*to_objs_p = get_trailer_rxrefs(rxrefs, *from_commit_p);
+	*dst_commit_p = (struct commit *)
+		rxrefs->dst_commits.objects[*idx_p].item;
+	*src_objs_p = get_trailer_rxrefs(rxrefs, *dst_commit_p);
 	(*idx_p)++;
 }

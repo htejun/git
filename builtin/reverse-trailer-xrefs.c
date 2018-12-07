@@ -14,7 +14,9 @@
 #include "parse-options.h"
 
 static const char * const reverse_trailer_xrefs_usage[] = {
-	N_("git reverse_trailer_xrefs [<options>] [<commit-ish>...]"),
+	N_("git reverse_trailer_xrefs --xref-cherry-picks [--clear] [<options>] [<commit-ish>...]"),
+	N_("git reverse_trailer_xrefs --trailer-prefix=<prefix> --ref=<notes-ref> --tag=<tag> [<options>] [<commit-ish>...]"),
+	N_("git reverse_trailer_xrefs --ref=<notes-ref> --clear [<options>] [<commit-ish>...]"),
 	NULL
 };
 
@@ -44,25 +46,25 @@ static void record_trailer_xrefs(struct commit *commit, void *data)
 }
 
 static int note_trailer_xrefs(struct notes_tree *tree,
-			      struct commit *from_commit, struct object_array *to_objs,
-			      const char *tag)
+			      struct commit *dst_commit,
+			      struct object_array *src_objs, const char *tag)
 {
-	char from_hex[GIT_MAX_HEXSZ + 1];
+	char dst_hex[GIT_MAX_HEXSZ + 1];
 	struct strbuf note = STRBUF_INIT;
 	struct object_id note_oid;
 	int i, ret;
 
-	oid_to_hex_r(from_hex, &from_commit->object.oid);
+	oid_to_hex_r(dst_hex, &dst_commit->object.oid);
 
-	for (i = 0; i < to_objs->nr; i++) {
-		const char *hex = to_objs->objects[i].name;
+	for (i = 0; i < src_objs->nr; i++) {
+		const char *hex = src_objs->objects[i].name;
 
 		if (tag)
 			strbuf_addf(&note, "%s: %s\n", tag, hex);
 		else
 			strbuf_addf(&note, "%s\n", tag);
 		if (verbose)
-			fprintf(stderr, "Adding note %s -> %s\n", from_hex, hex);
+			fprintf(stderr, "Adding note %s -> %s\n", dst_hex, hex);
 	}
 
 	ret = write_object_file(note.buf, note.len, blob_type, &note_oid);
@@ -70,7 +72,7 @@ static int note_trailer_xrefs(struct notes_tree *tree,
 	if (ret)
 		return ret;
 
-	ret = add_note(tree, &from_commit->object.oid, &note_oid, NULL);
+	ret = add_note(tree, &dst_commit->object.oid, &note_oid, NULL);
 	return ret;
 }
 
@@ -86,7 +88,7 @@ int cmd_reverse_trailer_xrefs(int argc, const char **argv, const char *prefix)
 	int cherry = 0, clear = 0;
 	const char *trailer_prefix = NULL, *notes_ref = NULL, *tag = NULL;
 	struct option options[] = {
-		OPT_BOOL(0, "xref-cherry-picks", &cherry, N_("use options for xref-cherry-picks notes")),
+		OPT_BOOL(0, "xref-cherry-picks", &cherry, N_("use preset for xref-cherry-picks notes")),
 		OPT_STRING(0, "trailer-prefix", &trailer_prefix, N_("prefix"), N_("process trailers starting with <prefix>")),
 		OPT_STRING(0, "ref", &notes_ref, N_("notes-ref"), N_("update notes in <notes-ref>")),
 		OPT_STRING(0, "tag", &tag, N_("tag"), N_("tag xref notes with <tag>")),
@@ -97,19 +99,16 @@ int cmd_reverse_trailer_xrefs(int argc, const char **argv, const char *prefix)
 
 	git_config(git_default_config, NULL);
 
-	init_revisions(&revs, prefix);
-	argc = setup_revisions(argc, argv, &revs, &s_r_opt);
 	argc = parse_options(argc, argv, prefix, options,
 			     reverse_trailer_xrefs_usage, 0);
 
-	/* allow inidividual options to override parts of --cherry */
+	init_revisions(&revs, prefix);
+	argc = setup_revisions(argc, argv, &revs, &s_r_opt);
+
 	if (cherry) {
-		if (!trailer_prefix)
-			trailer_prefix = cherry_picked_prefix;
-		if (!notes_ref)
-			notes_ref = NOTES_CHERRY_PICKS_REF;
-		if (!tag)
-			tag = NOTES_CHERRY_PICKED_TO_TAG;
+		trailer_prefix = cherry_picked_prefix;
+		notes_ref = NOTES_CHERRY_PICKS_REF;
+		tag = NOTES_CHERRY_PICKED_TO_TAG;
 	}
 
 	if (!notes_ref || (!clear && (!trailer_prefix || !tag)))
@@ -128,18 +127,20 @@ int cmd_reverse_trailer_xrefs(int argc, const char **argv, const char *prefix)
 		traverse_commit_list(&revs, clear_trailer_xref_note, NULL, &tree);
 	} else {
 		struct trailer_rev_xrefs rxrefs;
-		struct commit *from_commit;
-		struct object_array *to_objs;
+		struct commit *dst_commit;
+		struct object_array *src_objs;
 
 		trailer_rev_xrefs_init(&rxrefs, trailer_prefix);
 		traverse_commit_list(&revs, record_trailer_xrefs, NULL, &rxrefs);
 
-		trailer_rev_xrefs_for_each(&rxrefs, i, from_commit, to_objs) {
-			ret = note_trailer_xrefs(&tree, from_commit, to_objs,
+		trailer_rev_xrefs_for_each(&rxrefs, i, dst_commit, src_objs) {
+			ret = note_trailer_xrefs(&tree, dst_commit, src_objs,
 						 tag);
 			if (ret)
 				return ret;
 		}
+
+		trailer_rev_xrefs_release(&rxrefs);
 	}
 
 	commit_notes(&tree, "Notes updated by 'git reverse-trailer-xrefs'");
