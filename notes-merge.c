@@ -464,6 +464,15 @@ static int merge_one_change(struct notes_merge_options *o,
 			die("failed to concatenate notes "
 			    "(combine_notes_cat_sort_uniq)");
 		return 0;
+	case NOTES_MERGE_RESOLVE_CAT_XREFS:
+		if (o->verbosity >= 2)
+			printf("Concatenating unique and valid cross-references "
+			       "in local and remote notes for %s\n",
+			       oid_to_hex(&p->obj));
+		if (add_note(t, &p->obj, &p->remote, combine_notes_cat_xrefs))
+			die("failed to concatenate notes "
+			    "(combine_notes_cat_xrefs)");
+		return 0;
 	}
 	die("Unknown strategy (%i).", o->strategy);
 }

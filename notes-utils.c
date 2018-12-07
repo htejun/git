@@ -70,6 +70,8 @@ int parse_notes_merge_strategy(const char *v, enum notes_merge_strategy *s)
 		*s = NOTES_MERGE_RESOLVE_UNION;
 	else if (!strcmp(v, "cat_sort_uniq"))
 		*s = NOTES_MERGE_RESOLVE_CAT_SORT_UNIQ;
+	else if (!strcmp(v, "cat_xrefs"))
+		*s = NOTES_MERGE_RESOLVE_CAT_XREFS;
 	else
 		return -1;
 
