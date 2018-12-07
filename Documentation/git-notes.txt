@@ -88,11 +88,21 @@ append::
 	Append to the notes of an existing object (defaults to HEAD).
 	Creates a new notes object if needed.
 
+	If the notes ref starts with `/refs/notes/xref-`, each
+	line is expected to contain `<tag>: <commit-id>` and
+	only lines with reachable unique commit IDs are kept.
+
 edit::
 	Edit the notes for a given object (defaults to HEAD).
 
 show::
 	Show the notes for a given object (defaults to HEAD).
+
+	If the notes ref starts with `/refs/notes/xref-`,
+	for each line which contains `<tag>: <commit-id>`,
+	the tagged commit is followed recursively and the
+	matching note is shown with increasing levels of
+	indentations.
 
 merge::
 	Merge the given notes ref into the current notes ref.
@@ -272,6 +282,10 @@ format where one wants to avoid duplicated lines in the merge result.
 Note that if either the local or remote version contain duplicate lines
 prior to the merge, these will also be removed by this notes merge
 strategy.
+
+"cat_xrefs" is similar to "union" but expects each line to contain
+`<tag>: <commit-id>`. Only lines with reachable unique commit IDs are
+kept.
 
 
 EXAMPLES
