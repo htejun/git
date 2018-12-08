@@ -52,9 +52,9 @@ OPTIONS
 
 --xref-cherry-picks::
 	Use the preset to reverse map `git-cherry-pick -x`
-	trailers. `--trailer-prefix` is set to "(cherry-picked from
-	commit ", `--notes` is set to "refs/notes/xref-cherry-picks"
-	and `--tag` is set to "Cherry-picked-to". This option can't be
+	trailers. `--trailer-prefix` is set to `(cherry-picked from
+	commit `, `--notes` is set to `refs/notes/xref-cherry-picks`
+	and `--tag` is set to `Cherry-picked-to`. This option can't be
 	specified with the three preset options.
 
 --trailer-prefix=<prefix>::
@@ -66,13 +66,13 @@ OPTIONS
 --notes=<notes-ref>::
 	The notes ref to use for the reverse mapping. While this can
 	be any notes ref, it is recommented to use ones starting with
-	"refs/notes/xref-" as they are recognized as cross-referencing
+	`refs/notes/xref-` as they are recognized as cross-referencing
 	notes and handled specially when updating and showing.
 
 --tag=<tag>::
 	Optional tag to use when generating reverse reference
-	notes. If specified, each note line is formatted as "<tag>:
-	<commit-id>"; otherwise, "<commit-id>".
+	notes. If specified, each note line is formatted as `<tag>:
+	<commit-id>`; otherwise, `<commit-id>`.
 
 --clear::
 	Instead of creating reverse mapping notes, clear them from the
@@ -82,4 +82,55 @@ OPTIONS
 EXAMPLES
 --------
 
-Let's say 
+Assume the following history. Development is happening in "master" and
+releases are branched off and fixes are cherry-picked into them.
+
+------------
+	D'---E'' release-B
+       /
+      C'      E' release-D
+     /       /
+A---B---C---D---E master
+------------
+
+The following cherry-picks took place.
+
+------------
+C -> C'
+D -> D'
+E -> E' -> E''
+------------
+
+The reverse mappings for all commits can be created using the
+following command.
+
+------------
+$ git reverse-trailer-xrefs --all --xref-cherry-picks
+------------
+
+With the notes added, where each commit ended up can be easily
+determined.
+
+------------
+$ git log --notes=xref-cherry-picks --oneline | git name-rev --name-only --stdin
+4b165af commit E
+Notes (xref-cherry-picks):
+    Cherry-picked-to: release-D
+    Cherry-picked-to:   release-B
+
+82bf1f3 commit D
+Notes (xref-cherry-picks):
+    Cherry-picked-to: release-B~1
+
+364eccf commit C
+Notes (xref-cherry-picks):
+    Cherry-picked-to: release-B~2
+
+ed3adf3 commit B
+ddd1bf2 commit A
+------------
+
+
+GIT
+---
+Part of the linkgit:git[1] suite
