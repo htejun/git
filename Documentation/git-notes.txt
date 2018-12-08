@@ -98,12 +98,6 @@ edit::
 show::
 	Show the notes for a given object (defaults to HEAD).
 
-	If the notes ref starts with `/refs/notes/xref-`,
-	for each line which contains `<tag>: <commit-id>`,
-	the tagged commit is followed recursively and the
-	matching note is shown with increasing levels of
-	indentations.
-
 merge::
 	Merge the given notes ref into the current notes ref.
 	This will try to merge the changes made by the given
