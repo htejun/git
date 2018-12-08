@@ -8,6 +8,7 @@
 #include "dir.h"
 #include "sequencer.h"
 #include "branch.h"
+#include "refs.h"
 
 /*
  * This implements the builtins revert and cherry-pick.
@@ -223,12 +224,25 @@ int cmd_revert(int argc, const char **argv, const char *prefix)
 int cmd_cherry_pick(int argc, const char **argv, const char *prefix)
 {
 	struct replay_opts opts = REPLAY_OPTS_INIT;
+	struct object_id old_oid, new_oid;
+	char old_hex[GIT_MAX_HEXSZ + 1], new_hex[GIT_MAX_HEXSZ + 1];
 	int res;
+
+	if (read_ref("HEAD", &old_oid))
+		die(_("failed to read HEAD, cherry-pick failed"));
 
 	opts.action = REPLAY_PICK;
 	sequencer_init_config(&opts);
 	res = run_sequencer(argc, argv, &opts);
 	if (res < 0)
 		die(_("cherry-pick failed"));
+
+	if (read_ref("HEAD", &new_oid))
+		die(_("failed to read HEAD after cherry-pick"));
+
+	oid_to_hex_r(old_hex, &old_oid);
+	oid_to_hex_r(new_hex, &new_oid);
+	run_commit_hook(0, get_index_file(), "post-cherry-pick",
+			old_hex, new_hex, NULL);
 	return res;
 }
