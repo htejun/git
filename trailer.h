@@ -101,18 +101,40 @@ void trailer_info_release(struct trailer_info *info);
 void format_trailers_from_commit(struct strbuf *out, const char *msg,
 				 const struct process_trailer_options *opts);
 
-/* record reverse-mapping of trailers to xref notes */
-struct reverse_trailer_xrefs_args {
-	const char *trailer_prefix;
-	const char *notes_ref;
-	const char *tag;
+/*
+ * Helpers to reverse trailers referencing to other commits.
+ *
+ * Some trailers, e.g. "(cherry picked from...)", references other commits.
+ * The following helpers can be used to reverse map those references.  See
+ * builtin/reverse-trailer-xrefs.c for a usage example.
+ */
+declare_commit_slab(trailer_rxrefs_slab, struct object_array *);
+
+struct trailer_rev_xrefs {
+	char *trailer_prefix;
+	int trailer_prefix_len;
+	struct trailer_rxrefs_slab slab;
+	struct object_array dst_commits;
 };
 
-extern const struct reverse_trailer_xrefs_args reverse_cherry_pick_xrefs_args;
+void trailer_rev_xrefs_init(struct trailer_rev_xrefs *rxrefs,
+			    const char *trailer_prefix);
+void trailer_rev_xrefs_record(struct trailer_rev_xrefs *rxrefs,
+			      struct commit *commit);
+void trailer_rev_xrefs_release(struct trailer_rev_xrefs *rxrefs);
 
-int record_reverse_trailer_xrefs(const struct reverse_trailer_xrefs_args *args,
-				 struct rev_info *revs, int verbose);
-int clear_reverse_trailer_xrefs(const struct reverse_trailer_xrefs_args *args,
-				struct rev_info *revs, int verbose);
+void trailer_rev_xrefs_next(struct trailer_rev_xrefs *rxrefs,
+			    int *idx_p, struct commit **dst_commit_p,
+			    struct object_array **src_objs_p);
+
+/*
+ * Iterate the recorded reverse mappings - @dst_commit was pointed to by
+ * commits in @src_objs.
+ */
+#define trailer_rev_xrefs_for_each(rxrefs, idx, dst_commit, src_objs)		\
+	for ((idx) = 0,								\
+	     trailer_rev_xrefs_next(rxrefs, &(idx), &(dst_commit), &(src_objs));\
+	     (dst_commit);							\
+	     trailer_rev_xrefs_next(rxrefs, &(idx), &(dst_commit), &(src_objs)))
 
 #endif /* TRAILER_H */

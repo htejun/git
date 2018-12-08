@@ -6,13 +6,7 @@
 #include "commit.h"
 #include "tempfile.h"
 #include "trailer.h"
-#include "revision.h"
 #include "list.h"
-#include "blob.h"
-#include "notes.h"
-#include "notes-utils.h"
-#include "object-store.h"
-#include "list-objects.h"
 /*
  * Copyright (c) 2013, 2014 Christian Couder <chriscool@tuxfamily.org>
  */
@@ -1178,21 +1172,7 @@ void format_trailers_from_commit(struct strbuf *out, const char *msg,
 	trailer_info_release(&info);
 }
 
-/*
- * Helpers to reverse trailers referencing to other commits.
- *
- * Some trailers, e.g. "(cherry picked from...)", references other commits.
- * The following helpers can be used to reverse map those references.  See
- * builtin/reverse-trailer-xrefs.c for a usage example.
- */
-define_commit_slab(trailer_rxrefs_slab, struct object_array *);
-
-struct trailer_rev_xrefs {
-	char *trailer_prefix;
-	int trailer_prefix_len;
-	struct trailer_rxrefs_slab slab;
-	struct object_array dst_commits;
-};
+implement_static_commit_slab(trailer_rxrefs_slab, struct object_array *);
 
 static struct object_array *get_trailer_rxrefs(
 			struct trailer_rev_xrefs *rxrefs, struct commit *commit)
@@ -1219,8 +1199,8 @@ static struct object_array *get_create_trailer_rxrefs(
 	return *slot;
 }
 
-static void trailer_rev_xrefs_init(struct trailer_rev_xrefs *rxrefs,
-				   const char *trailer_prefix)
+void trailer_rev_xrefs_init(struct trailer_rev_xrefs *rxrefs,
+			    const char *trailer_prefix)
 {
 	rxrefs->trailer_prefix = xstrdup(trailer_prefix);
 	rxrefs->trailer_prefix_len = strlen(trailer_prefix);
@@ -1229,8 +1209,8 @@ static void trailer_rev_xrefs_init(struct trailer_rev_xrefs *rxrefs,
 }
 
 /* record the reverse mapping of @commit's xref trailer */
-static void trailer_rev_xrefs_record(struct trailer_rev_xrefs *rxrefs,
-				     struct commit *commit)
+void trailer_rev_xrefs_record(struct trailer_rev_xrefs *rxrefs,
+			      struct commit *commit)
 {
 	struct process_trailer_options opts = PROCESS_TRAILER_OPTIONS_INIT;
 	enum object_type type;
@@ -1273,14 +1253,14 @@ static void trailer_rev_xrefs_record(struct trailer_rev_xrefs *rxrefs,
 	free(buffer);
 }
 
-static void trailer_rev_xrefs_release(struct trailer_rev_xrefs *rxrefs)
+void trailer_rev_xrefs_release(struct trailer_rev_xrefs *rxrefs)
 {
 	clear_trailer_rxrefs_slab(&rxrefs->slab);
 	object_array_clear(&rxrefs->dst_commits);
 	free(rxrefs->trailer_prefix);
 }
 
-static void trailer_rev_xrefs_next(struct trailer_rev_xrefs *rxrefs, int *idx_p,
+void trailer_rev_xrefs_next(struct trailer_rev_xrefs *rxrefs, int *idx_p,
 			    struct commit **dst_commit_p,
 			    struct object_array **src_objs_p)
 {
@@ -1294,129 +1274,4 @@ static void trailer_rev_xrefs_next(struct trailer_rev_xrefs *rxrefs, int *idx_p,
 		rxrefs->dst_commits.objects[*idx_p].item;
 	*src_objs_p = get_trailer_rxrefs(rxrefs, *dst_commit_p);
 	(*idx_p)++;
-}
-
-/*
- * Iterate the recorded reverse mappings - @dst_commit was pointed to by
- * commits in @src_objs.
- */
-#define trailer_rev_xrefs_for_each(rxrefs, idx, dst_commit, src_objs)		\
-	for ((idx) = 0,								\
-	     trailer_rev_xrefs_next(rxrefs, &(idx), &(dst_commit), &(src_objs));\
-	     (dst_commit);							\
-	     trailer_rev_xrefs_next(rxrefs, &(idx), &(dst_commit), &(src_objs)))
-
-static int trailer_xref_note_verbose = 0;
-
-const struct reverse_trailer_xrefs_args reverse_cherry_pick_xrefs_args = {
-	.trailer_prefix = "(cherry picked from commit ",
-	.notes_ref = NOTES_CHERRY_PICKS_REF,
-	.tag = NOTES_CHERRY_PICKED_TO_TAG,
-};
-
-static void clear_trailer_xref_note(struct commit *commit, void *data)
-{
-	struct notes_tree *tree = data;
-	int status;
-
-	status = remove_note(tree, commit->object.oid.hash);
-
-	if (trailer_xref_note_verbose) {
-		if (status)
-			fprintf(stderr, "Object %s has no note\n",
-				oid_to_hex(&commit->object.oid));
-		else
-			fprintf(stderr, "Removing note for object %s\n",
-				oid_to_hex(&commit->object.oid));
-	}
-}
-
-static void record_trailer_xrefs(struct commit *commit, void *data)
-{
-	printf("XXX record %s\n", oid_to_hex(&commit->object.oid));
-	trailer_rev_xrefs_record(data, commit);
-}
-
-static int note_trailer_xrefs(struct notes_tree *tree,
-			      struct commit *dst_commit,
-			      struct object_array *src_objs,
-			      const char *tag)
-{
-	char dst_hex[GIT_MAX_HEXSZ + 1];
-	struct strbuf note = STRBUF_INIT;
-	struct object_id note_oid;
-	int i, ret;
-
-	oid_to_hex_r(dst_hex, &dst_commit->object.oid);
-
-	for (i = 0; i < src_objs->nr; i++) {
-		const char *hex = src_objs->objects[i].name;
-
-		if (tag)
-			strbuf_addf(&note, "%s: %s\n", tag, hex);
-		else
-			strbuf_addf(&note, "%s\n", tag);
-		if (trailer_xref_note_verbose)
-			fprintf(stderr, "Adding note %s -> %s\n", dst_hex, hex);
-	}
-
-	ret = write_object_file(note.buf, note.len, blob_type, &note_oid);
-	strbuf_release(&note);
-	if (ret)
-		return ret;
-
-	ret = add_note(tree, &dst_commit->object.oid, &note_oid, NULL);
-	return ret;
-}
-
-static int update_reverse_trailer_xrefs(
-		const struct reverse_trailer_xrefs_args *args,
-		struct rev_info *revs, int clear, int verbose)
-{
-	struct notes_tree tree = { };
-	int i, ret;
-
-	printf("XXX update_reverse_trailer_xrefs clear=%d verbose=%d\n", clear, verbose);
-	trailer_xref_note_verbose = verbose;
-
-	init_notes(&tree, args->notes_ref, NULL, NOTES_INIT_WRITABLE);
-
-	if (prepare_revision_walk(revs))
-		die("revision walk setup failed");
-
-	if (clear) {
-		traverse_commit_list(revs, clear_trailer_xref_note, NULL, &tree);
-	} else {
-		struct trailer_rev_xrefs rxrefs;
-		struct commit *dst_commit;
-		struct object_array *src_objs;
-
-		trailer_rev_xrefs_init(&rxrefs, args->trailer_prefix);
-		traverse_commit_list(revs, record_trailer_xrefs, NULL, &rxrefs);
-
-		trailer_rev_xrefs_for_each(&rxrefs, i, dst_commit, src_objs) {
-			ret = note_trailer_xrefs(&tree, dst_commit, src_objs,
-						 args->tag);
-			if (ret)
-				return ret;
-		}
-
-		trailer_rev_xrefs_release(&rxrefs);
-	}
-
-	commit_notes(&tree, "Notes updated by 'reverse_trailer_xrefs'");
-	free_notes(&tree);
-	return 0;
-}
-
-int record_reverse_trailer_xrefs(const struct reverse_trailer_xrefs_args *args,
-				 struct rev_info *revs, int verbose)
-{
-	return update_reverse_trailer_xrefs(args, revs, 0, verbose);
-}
-
-int clear_reverse_trailer_xrefs(const struct reverse_trailer_xrefs_args *args,
-				struct rev_info *revs, int verbose)
-{
-	return update_reverse_trailer_xrefs(args, revs, 1, verbose);
 }
