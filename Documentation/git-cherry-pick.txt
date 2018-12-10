@@ -224,6 +224,11 @@ the working tree.
 spending extra time to avoid mistakes based on incorrectly matching
 context lines.
 
+HOOKS
+-----
+This command can run `post-cherry-pick` hook. See linkgit:githooks[5]
+for more information.
+
 SEE ALSO
 --------
 linkgit:git-revert[1]

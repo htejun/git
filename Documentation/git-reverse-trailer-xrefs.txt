@@ -22,7 +22,7 @@ Some commit trailers reference other commits. For example,
 `git-cherry-pick -x` adds the following trailer to record the source
 commit.
 ----------
-`(cherry picked from commit <source-commit-id>)`
+(cherry picked from commit <source-commit-id>)
 ----------
 The reverse mappings of such cross references can be useful. For
 cherry-picks, it would allow finding all the cherry-picked commits of
@@ -34,7 +34,7 @@ parsed from the specified commits and the reverse mappings are
 recorded in the `refs/notes/xref-cherry-picks` notes of the source
 commits in the following format.
 ----------
-`Cherry-picked-to: <destination-commit-id>`
+Cherry-picked-to: <destination-commit-id>
 ----------
 
 When a note with its notes ref starting with `refs/notes/xref-` is
@@ -129,6 +129,15 @@ Notes (xref-cherry-picks):
 ed3adf3 commit B
 ddd1bf2 commit A
 ------------
+
+
+Keeping xref-cherry-picks up-to-date
+------------------------------------
+
+Reverse-maps can be kept-up incrementally with hooks. For example, to
+keep xref-cherry-picks up-to-date, `git-reverse-trailer-xrefs` should
+be invoked on new cherry-picks and fetched commits. See
+`hooks/post-cherry-pick.sample` and `hooks/post-fetch.sample`.
 
 
 GIT

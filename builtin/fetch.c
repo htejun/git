@@ -513,19 +513,22 @@ static struct ref *get_ref_map(struct remote *remote,
 
 static void record_post_fetch(const char *name,
 			      const struct object_id *old_oid,
+			      const char *remote,
 			      const struct object_id *new_oid)
 {
 	char old_hex[GIT_MAX_HEXSZ + 1], new_hex[GIT_MAX_HEXSZ + 1];
 
 	oid_to_hex_r(old_hex, old_oid);
 	oid_to_hex_r(new_hex, new_oid);
-	strbuf_addf(&post_fetch_sb, "%s %s %s\n", name, old_hex, new_hex);
+	strbuf_addf(&post_fetch_sb, "%s %s %s %s\n",
+		    name, old_hex, remote ?: "(delete)", new_hex);
 }
 
 #define STORE_REF_ERROR_OTHER 1
 #define STORE_REF_ERROR_DF_CONFLICT 2
 
 static int s_update_ref(const char *action,
+			const char *remote,
 			struct ref *ref,
 			int check_old)
 {
@@ -558,7 +561,7 @@ static int s_update_ref(const char *action,
 	ref_transaction_free(transaction);
 	strbuf_release(&err);
 	free(msg);
-	record_post_fetch(ref->name, &ref->old_oid, &ref->new_oid);
+	record_post_fetch(ref->name, &ref->old_oid, remote, &ref->new_oid);
 	return 0;
 fail:
 	ref_transaction_free(transaction);
@@ -739,7 +742,7 @@ static int update_local_ref(struct ref *ref,
 	    starts_with(ref->name, "refs/tags/")) {
 		if (force || ref->force) {
 			int r;
-			r = s_update_ref("updating tag", ref, 0);
+			r = s_update_ref("updating tag", remote, ref, 0);
 			format_display(display, r ? '!' : 't', _("[tag update]"),
 				       r ? _("unable to update local ref") : NULL,
 				       remote, pretty_ref, summary_width);
@@ -779,7 +782,7 @@ static int update_local_ref(struct ref *ref,
 		if ((recurse_submodules != RECURSE_SUBMODULES_OFF) &&
 		    (recurse_submodules != RECURSE_SUBMODULES_ON))
 			check_for_new_submodule_commits(&ref->new_oid);
-		r = s_update_ref(msg, ref, 0);
+		r = s_update_ref(msg, remote, ref, 0);
 		format_display(display, r ? '!' : '*', what,
 			       r ? _("unable to update local ref") : NULL,
 			       remote, pretty_ref, summary_width);
@@ -795,7 +798,7 @@ static int update_local_ref(struct ref *ref,
 		if ((recurse_submodules != RECURSE_SUBMODULES_OFF) &&
 		    (recurse_submodules != RECURSE_SUBMODULES_ON))
 			check_for_new_submodule_commits(&ref->new_oid);
-		r = s_update_ref("fast-forward", ref, 1);
+		r = s_update_ref("fast-forward", remote, ref, 1);
 		format_display(display, r ? '!' : ' ', quickref.buf,
 			       r ? _("unable to update local ref") : NULL,
 			       remote, pretty_ref, summary_width);
@@ -810,7 +813,7 @@ static int update_local_ref(struct ref *ref,
 		if ((recurse_submodules != RECURSE_SUBMODULES_OFF) &&
 		    (recurse_submodules != RECURSE_SUBMODULES_ON))
 			check_for_new_submodule_commits(&ref->new_oid);
-		r = s_update_ref("forced-update", ref, 1);
+		r = s_update_ref("forced-update", remote, ref, 1);
 		format_display(display, r ? '!' : '+', quickref.buf,
 			       r ? _("unable to update local ref") : _("forced update"),
 			       remote, pretty_ref, summary_width);
@@ -1086,7 +1089,8 @@ static int prune_refs(struct refspec *rs, struct ref *ref_map,
 
 		for (ref = stale_refs; ref; ref = ref->next) {
 			string_list_append(&refnames, ref->name);
-			record_post_fetch(ref->name, &ref->old_oid, &null_oid);
+			record_post_fetch(ref->name, &ref->old_oid,
+					  NULL, &null_oid);
 		}
 
 		result = delete_refs("fetch: prune", &refnames, 0);

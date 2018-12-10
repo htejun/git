@@ -7,7 +7,7 @@
 
 z40=0000000000000000000000000000000000000000
 
-while read ref old_sha new_sha
+while read ref old_sha remote new_sha
 do
     case $ref in
     refs/heads/*)

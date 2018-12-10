@@ -149,6 +149,14 @@ invoked after a commit is made.
 This hook is meant primarily for notification, and cannot affect
 the outcome of `git commit`.
 
+post-cherry-pick
+~~~~~~~~~~~~~~~~
+
+This hook is invoked by linkgit:git-cherry-pick[1]. This hook is
+called with two parameters. The first is `<old sha1>` and the second
+`<new sha1>`, where `<old sha1>..<new sha1>` describes all new
+cherry-picked commits.
+
 pre-rebase
 ~~~~~~~~~~
 
@@ -190,6 +198,21 @@ This hook can be used in conjunction with a corresponding pre-commit hook to
 save and restore any form of metadata associated with the working tree
 (e.g.: permissions/ownership, ACLS, etc).  See contrib/hooks/setgitperms.perl
 for an example of how to do this.
+
+post-fetch
+~~~~~~~~~~
+This hook is called by linkgit:git-fetch[1] and can be used to process
+newly fetched commits and tags.
+
+Information about what was fetched is provided on the hook's standard
+input with lines of the form:
+
+  <local ref> SP <old sha1> SP <remote ref> SP <new sha1> LF
+
+where `<local ref>` got updated from `<old sha1>` to `<new sha1>` as a
+result of fetching `<remote ref>`. If a branch or tag was created,
+`<old_sha1>` will be 40 `0`. If a tag was pruned, `<remote_ref>` will
+be `(delete)` and <new sha1> will be 40 `0`.
 
 pre-push
 ~~~~~~~~
