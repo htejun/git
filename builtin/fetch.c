@@ -66,6 +66,7 @@ static struct refspec refmap = REFSPEC_INIT_FETCH;
 static struct list_objects_filter_options filter_options;
 static struct string_list server_options = STRING_LIST_INIT_DUP;
 static struct string_list negotiation_tip = STRING_LIST_INIT_NODUP;
+static struct strbuf post_fetch_sb = STRBUF_INIT;
 
 static int git_fetch_config(const char *k, const char *v, void *cb)
 {
@@ -510,6 +511,17 @@ static struct ref *get_ref_map(struct remote *remote,
 	return ref_map;
 }
 
+static void record_post_fetch(const char *name,
+			      const struct object_id *old_oid,
+			      const struct object_id *new_oid)
+{
+	char old_hex[GIT_MAX_HEXSZ + 1], new_hex[GIT_MAX_HEXSZ + 1];
+
+	oid_to_hex_r(old_hex, old_oid);
+	oid_to_hex_r(new_hex, new_oid);
+	strbuf_addf(&post_fetch_sb, "%s %s %s\n", name, old_hex, new_hex);
+}
+
 #define STORE_REF_ERROR_OTHER 1
 #define STORE_REF_ERROR_DF_CONFLICT 2
 
@@ -546,6 +558,7 @@ static int s_update_ref(const char *action,
 	ref_transaction_free(transaction);
 	strbuf_release(&err);
 	free(msg);
+	record_post_fetch(ref->name, &ref->old_oid, &ref->new_oid);
 	return 0;
 fail:
 	ref_transaction_free(transaction);
@@ -1071,8 +1084,10 @@ static int prune_refs(struct refspec *rs, struct ref *ref_map,
 	if (!dry_run) {
 		struct string_list refnames = STRING_LIST_INIT_NODUP;
 
-		for (ref = stale_refs; ref; ref = ref->next)
+		for (ref = stale_refs; ref; ref = ref->next) {
 			string_list_append(&refnames, ref->name);
+			record_post_fetch(ref->name, &ref->old_oid, &null_oid);
+		}
 
 		result = delete_refs("fetch: prune", &refnames, 0);
 		string_list_clear(&refnames, 0);
@@ -1561,6 +1576,47 @@ static int fetch_one(struct remote *remote, int argc, const char **argv, int pru
 	return exit_code;
 }
 
+static int run_post_fetch_hook(void)
+{
+	int ret = 0, x;
+	struct child_process proc = CHILD_PROCESS_INIT;
+	const char *argv[2];
+
+	if (!(argv[0] = find_hook("post-fetch")))
+		return 0;
+	argv[1] = NULL;
+
+	proc.argv = argv;
+	proc.in = -1;
+
+	if (start_command(&proc)) {
+		finish_command(&proc);
+		return -1;
+	}
+
+	sigchain_push(SIGPIPE, SIG_IGN);
+
+	if (write_in_full(proc.in, post_fetch_sb.buf, post_fetch_sb.len) < 0) {
+		/* We do not mind if a hook does not read all refs. */
+		if (errno != EPIPE)
+			ret = -1;
+	}
+
+	strbuf_release(&post_fetch_sb);
+
+	x = close(proc.in);
+	if (!ret)
+		ret = x;
+
+	sigchain_pop(SIGPIPE);
+
+	x = finish_command(&proc);
+	if (!ret)
+		ret = x;
+
+	return ret;
+}
+
 int cmd_fetch(int argc, const char **argv, const char *prefix)
 {
 	int i;
@@ -1668,6 +1724,8 @@ int cmd_fetch(int argc, const char **argv, const char *prefix)
 	string_list_clear(&list, 0);
 
 	close_all_packs(the_repository->objects);
+
+	run_post_fetch_hook();
 
 	argv_array_pushl(&argv_gc_auto, "gc", "--auto", NULL);
 	if (verbosity < 0)

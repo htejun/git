@@ -9,6 +9,7 @@
 #include "sequencer.h"
 #include "branch.h"
 #include "refs.h"
+#include "run-command.h"
 
 /*
  * This implements the builtins revert and cherry-pick.
@@ -242,7 +243,7 @@ int cmd_cherry_pick(int argc, const char **argv, const char *prefix)
 
 	oid_to_hex_r(old_hex, &old_oid);
 	oid_to_hex_r(new_hex, &new_oid);
-	run_commit_hook(0, get_index_file(), "post-cherry-pick",
-			old_hex, new_hex, NULL);
+	run_hook_le(0, get_index_file(), "post-cherry-pick",
+		    old_hex, new_hex, NULL);
 	return res;
 }
