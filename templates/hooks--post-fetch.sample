@@ -1,0 +1,30 @@
+#!/bin/sh
+#
+# An example hook script to reverse map cherry-picks in newly fetched
+# commits. See git-reverse-trailer-xrefs(1) for details.
+#
+# To enable this hook, rename this file to "post-fetch".
+
+z40=0000000000000000000000000000000000000000
+
+while read ref old_sha new_sha
+do
+    case $ref in
+    refs/heads/*)
+	;;
+    *)
+	continue
+    esac
+
+    if [ $new_sha == $z40 ]
+    then
+	continue
+    fi
+
+    if [ $old_sha != $z40 ]
+    then
+	git reverse-trailer-xrefs --xref-cherry-picks $old_sha..$new_sha
+    else
+	git reverse-trailer-xrefs --xref-cherry-picks $new_sha
+    fi
+done

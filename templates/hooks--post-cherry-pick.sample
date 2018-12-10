@@ -1,0 +1,8 @@
+#!/bin/sh
+#
+# An example hook script to reverse map new cherry-picks. See
+# git-reverse-trailer-xrefs(1) for details.
+#
+# To enable this hook, rename this file to "post-cherry-pick".
+
+git reverse-trailer-xrefs --xref-cherry-picks $1..$2
