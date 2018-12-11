@@ -1,3 +1,11 @@
+From: Tejun Heo <htejun@fb.com>
+Subject: notes: Implement xref-cherry-picks hooks and tests
+
+Add post-cherry-pick.sample and post-fetch.sample which, when enabled,
+will keep refs/notes/xref-cherry-picks up-to-date as new cherry-picks
+are created and fetched.  Also, add tests to verify xref-cherry-picks.
+
+Signed-off-by: Tejun Heo <htejun@fb.com>
 ---
  Documentation/git-reverse-trailer-xrefs.txt |    9 ++
  t/t3321-notes-xref-cherry-picks.sh          |  124 ++++++++++++++++++++++++++++

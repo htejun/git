@@ -1,10 +1,27 @@
+From: Tejun Heo <htejun@fb.com>
+Subject: notes: Implement git-reverse-trailer-xrefs
+
+Some trailers refer to other commits.  Let's call them xrefs
+(cross-references).  For example, a cherry pick trailer points to the
+source commit.  It is sometimes useful to build a reverse map of these
+xrefs - ie. source -> cherry-pick instead of cherry-pick -> source.
+
+This patch implements git-reverse-trailer-xrefs which can process a
+given trailer for the specified commits and generate and update the
+matching refs/notes/xref- notes.
+
+The command reverse-maps trailers beginning with --trailer-prefix and
+stores them in --ref notes with each line tagged with --tag.  It also
+has a refs/notes/xref-cherry-picks preset for the three params.
+
+Signed-off-by: Tejun Heo <htejun@fb.com>
 ---
- Documentation/git-reverse-trailer-xrefs.txt |  136 ++++++++++++++++++++++++
+ Documentation/git-reverse-trailer-xrefs.txt |  136 +++++++++++++++++++++++
  Makefile                                    |    1 
  builtin.h                                   |    1 
- builtin/reverse-trailer-xrefs.c             |  157 ++++++++++++++++++++++++++++
+ builtin/reverse-trailer-xrefs.c             |  160 ++++++++++++++++++++++++++++
  git.c                                       |    1 
- 5 files changed, 296 insertions(+)
+ 5 files changed, 299 insertions(+)
 
 --- /dev/null
 +++ b/Documentation/git-reverse-trailer-xrefs.txt
@@ -167,7 +184,7 @@
  extern int cmd_patch_id(int argc, const char **argv, const char *prefix);
 --- /dev/null
 +++ b/builtin/reverse-trailer-xrefs.c
-@@ -0,0 +1,157 @@
+@@ -0,0 +1,160 @@
 +#include "builtin.h"
 +#include "cache.h"
 +#include "strbuf.h"
@@ -190,7 +207,10 @@
 +	NULL
 +};
 +
-+static const char cherry_picked_prefix[] = "(cherry picked from commit ";
++#define CHERRY_PICKED_PREFIX	"(cherry picked from commit "
++#define CHERRY_PICKS_REF	"refs/notes/xref-cherry-picks"
++#define CHERRY_PICKED_TO_TAG	"Cherry-picked-to"
++
 +static int verbose;
 +
 +static void clear_trailer_xref_note(struct commit *commit, void *data)
@@ -311,9 +331,9 @@
 +	argc = setup_revisions(argc, argv, &revs, &s_r_opt);
 +
 +	if (cherry) {
-+		trailer_prefix = cherry_picked_prefix;
-+		notes_ref = NOTES_CHERRY_PICKS_REF;
-+		tag = NOTES_CHERRY_PICKED_TO_TAG;
++		trailer_prefix = CHERRY_PICKED_PREFIX;
++		notes_ref = CHERRY_PICKS_REF;
++		tag = CHERRY_PICKED_TO_TAG;
 +	}
 +
 +	if (!notes_ref || (!clear && (!trailer_prefix || !tag)))

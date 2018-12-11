@@ -1,3 +1,16 @@
+From: Tejun Heo <htejun@fb.com>
+Subject: githooks: Add post-cherry-pick and post-fetch hooks
+
+* post-cherry-pick: Called after a cherry-pick and given parameters so
+  that it can tell which are the new cherry-picks.
+
+* post-fetch: Called after a fetch.  Each updated ref and sha1 are fed
+  on stdin.
+
+These two hooks will be used to keep refs/notes/xref-cherry-picks
+up-to-date.
+
+Signed-off-by: Tejun Heo <htejun@fb.com>
 ---
  Documentation/git-cherry-pick.txt |    5 ++
  Documentation/git-fetch.txt       |    5 ++

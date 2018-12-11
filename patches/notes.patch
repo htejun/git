@@ -1,11 +1,35 @@
+From: Tejun Heo <htejun@fb.com>
+Subject: notes: Implement special handlings for refs/notes/xref-
+
+Some trailers refer to other commits.  Let's call them xrefs
+(cross-references).  For example, a cherry pick trailer points to the
+source commit.  It is sometimes useful to build a reverse map of these
+xrefs - ie. source -> cherry-pick instead of cherry-pick -> source.
+
+These reverse-maps will be recorded in special notes whose refs start
+with refs/notes/xref-.  This patch implements the following special
+handling for the xref notes.
+
+* When xref notes are appended to an existing one, both parts get
+  parsed and dead or dupliate references are dropped, so that the
+  merged note contains only valid and unique xrefs.
+
+* When xref notes are formatted for printing, the formatter recurses
+  into each xref and prints the nested xrefs with increasing
+  indentation to show the comprehensive xref chains.
+
+The latter part will be documented by a future patch with the actual
+use case.
+
+Signed-off-by: Tejun Heo <htejun@fb.com>
 ---
  Documentation/git-notes.txt |    8 +
  notes-merge.c               |    9 +
  notes-utils.c               |    2 
  notes-utils.h               |    3 
  notes.c                     |  260 +++++++++++++++++++++++++++++++++++++++++++-
- notes.h                     |   12 ++
- 6 files changed, 291 insertions(+), 3 deletions(-)
+ notes.h                     |    9 +
+ 6 files changed, 288 insertions(+), 3 deletions(-)
 
 --- a/Documentation/git-notes.txt
 +++ b/Documentation/git-notes.txt
@@ -382,7 +406,7 @@
 +}
 --- a/notes.h
 +++ b/notes.h
-@@ -2,10 +2,14 @@
+@@ -2,6 +2,7 @@
  #define NOTES_H
  
  #include "string-list.h"
@@ -390,14 +414,7 @@
  
  struct object_id;
  struct strbuf;
- 
-+#define NOTES_CHERRY_PICKS_REF		"refs/notes/xref-cherry-picks"
-+#define NOTES_CHERRY_PICKED_TO_TAG	"Cherry-picked-to"
-+
- /*
-  * Function type for combining two notes annotating the same object.
-  *
-@@ -317,4 +321,12 @@ void expand_notes_ref(struct strbuf *sb)
+@@ -317,4 +318,12 @@ void expand_notes_ref(struct strbuf *sb)
   */
  void expand_loose_notes_ref(struct strbuf *sb);
  

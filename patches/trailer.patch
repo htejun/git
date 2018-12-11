@@ -1,3 +1,23 @@
+From: Tejun Heo <htejun@fb.com>
+Subject: trailer: Implement a helper to reverse-map trailer xrefs
+
+Some trailers refer to other commits.  Let's call them xrefs
+(cross-references).  For example, a cherry pick trailer points to the
+source commit.  It is sometimes useful to build a reverse map of these
+xrefs - ie. source -> cherry-pick instead of cherry-pick -> source.
+
+This patch implements trailer helpers to enable such reverse maps.
+
+The helpers can process arbitrary trailers and once the xrefs are
+recorded, the reverse-mapping can be iterated per source commit using
+trailer_rev_xrefs_for_each().
+
+Signed-off-by: Tejun Heo <htejun@fb.com>
+---
+ trailer.c |  105 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ trailer.h |   38 ++++++++++++++++++++++
+ 2 files changed, 143 insertions(+)
+
 --- a/trailer.c
 +++ b/trailer.c
 @@ -2,6 +2,7 @@
@@ -8,7 +28,7 @@
  #include "commit.h"
  #include "tempfile.h"
  #include "trailer.h"
-@@ -1170,3 +1171,107 @@ void format_trailers_from_commit(struct strbuf *out, const char *msg,
+@@ -1170,3 +1171,107 @@ void format_trailers_from_commit(struct
  	format_trailer_info(out, &info, opts);
  	trailer_info_release(&info);
  }
@@ -127,7 +147,7 @@
  
  struct strbuf;
  
-@@ -99,4 +101,40 @@ void trailer_info_release(struct trailer_info *info);
+@@ -99,4 +101,40 @@ void trailer_info_release(struct trailer
  void format_trailers_from_commit(struct strbuf *out, const char *msg,
  				 const struct process_trailer_options *opts);
  
